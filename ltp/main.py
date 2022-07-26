@@ -87,6 +87,39 @@ def _get_qemu_config(params: list) -> dict:
     return config
 
 
+def _get_ltx_config(params: list) -> dict:
+    """
+    Return ltx configuration.
+    """
+    config = _from_params_to_config(params)
+
+    if "stdin" not in config:
+        raise argparse.ArgumentTypeError(
+            "'stdin' parameter is required by LTX SUT")
+
+    if "stdout" not in config:
+        raise argparse.ArgumentTypeError(
+            "'stdout' parameter is required by LTX SUT")
+
+    if not os.path.exists(config["stdin"]):
+        raise argparse.ArgumentTypeError("'stdin' parameter is not a file")
+
+    if not os.path.exists(config["stdout"]):
+        raise argparse.ArgumentTypeError("'stdout' parameter is not a file")
+
+    defaults = (
+        'stdin',
+        'stdout',
+    )
+
+    if not set(config).issubset(defaults):
+        raise argparse.ArgumentTypeError(
+            "Some parameters are not supported. "
+            f"Please use the following: {', '.join(defaults)}")
+
+    return config
+
+
 def _sut_config(value: str) -> dict:
     """
     Return a SUT configuration according with input string.
@@ -101,6 +134,7 @@ def _sut_config(value: str) -> dict:
         msg += "\nSupported SUT:\n"
         msg += "\thost: current machine (default)\n"
         msg += "\tqemu: Qemu virtual machine\n"
+        msg += "\tltx: LTX executor\n"
         msg += "\nqemu parameters:\n"
         msg += "\timage: qcow2 image location\n"
         msg += "\timage_overlay: image copy location\n"
@@ -111,6 +145,9 @@ def _sut_config(value: str) -> dict:
         msg += "\tserial: type of serial protocol. isa|virtio (default: isa)\n"
         msg += "\tvirtfs: directory to mount inside VM\n"
         msg += "\tro_image: path of the image that will exposed as read only\n"
+        msg += "\nltx parameters:\n"
+        msg += "\tstdin: stdin file path\n"
+        msg += "\tstdout: stdout file path\n"
 
         return dict(help=msg)
 
@@ -125,6 +162,8 @@ def _sut_config(value: str) -> dict:
         config = _get_qemu_config(params[1:])
     elif name == 'host':
         config = _from_params_to_config(params[1:])
+    elif name == 'ltx':
+        config = _get_ltx_config(params[1:])
     else:
         raise argparse.ArgumentTypeError(f"'{name}' SUT is not supported")
 

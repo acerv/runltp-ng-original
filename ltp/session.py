@@ -11,6 +11,7 @@ import logging
 import threading
 import ltp.events
 from ltp import LTPException
+from ltp.ltx import LTXSUT
 from ltp.sut import SUT
 from ltp.sut import IOBuffer
 from ltp.qemu import QemuSUT
@@ -122,7 +123,7 @@ class Session:
         Start a new SUT and return it initialized.
         """
         sut_name = sut_config.get("name", None)
-        if sut_name not in ["qemu", "host"]:
+        if sut_name not in ["qemu", "host", "ltx"]:
             raise ValueError(f"{sut_name} is not supported")
 
         testcases = os.path.join(ltpdir, "testcases", "bin")
@@ -148,6 +149,15 @@ class Session:
             config.update(sut_config)
 
             sut = QemuSUT(**config)
+            timeout = 360.0
+        elif sut_name == 'ltx':
+            config = {}
+            config['env'] = env
+            config['cwd'] = testcases
+            config['tmpdir'] = session_tmpdir
+            config.update(sut_config)
+
+            sut = LTXSUT(**config)
             timeout = 360.0
         else:
             sut = HostSUT(cwd=ltpdir, env=env)
