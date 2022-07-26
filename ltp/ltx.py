@@ -62,6 +62,7 @@ class LTXSUT(SUT):
     def is_running(self) -> bool:
         return self._ltx is not None
 
+<<<<<<< HEAD
     def ping(self) -> float:
         if not self.is_running:
             raise SUTError("SUT is not running")
@@ -83,6 +84,8 @@ class LTXSUT(SUT):
     def get_tained_info(self) -> set:
         return 0, []
 
+=======
+>>>>>>> 2596020 (LTX system under test implementation)
     def _stop(self) -> None:
         """
         Internal stop routine.
@@ -109,6 +112,7 @@ class LTXSUT(SUT):
         self._logger.info("LTX executions stopped")
 
     def stop(
+<<<<<<< HEAD
             self,
             timeout: float = 30,
             iobuffer: IOBuffer = None) -> None:
@@ -124,6 +128,23 @@ class LTXSUT(SUT):
             self,
             timeout: float = 3600,
             iobuffer: IOBuffer = None) -> None:
+=======
+        self,
+        timeout: float = 30,
+        iobuffer: IOBuffer = None) -> None:
+        self._stop()
+
+    def force_stop(
+        self,
+        timeout: float = 30,
+        iobuffer: IOBuffer = None) -> None:
+        self._stop()
+
+    def communicate(
+        self,
+        timeout: float = 3600,
+        iobuffer: IOBuffer = None) -> None:
+>>>>>>> 2596020 (LTX system under test implementation)
         try:
             self._logger.info("Setting up LTX")
 
@@ -145,10 +166,17 @@ class LTXSUT(SUT):
             raise SUTError(f"LTX: {str(err)}")
 
     def run_command(
+<<<<<<< HEAD
             self,
             command: str,
             timeout: float = 3600,
             iobuffer: IOBuffer = None) -> dict:
+=======
+        self,
+        command: str,
+        timeout: float = 3600,
+        iobuffer: IOBuffer = None) -> dict:
+>>>>>>> 2596020 (LTX system under test implementation)
         if not command:
             raise ValueError("command is empty")
 
@@ -156,7 +184,11 @@ class LTXSUT(SUT):
             raise SUTError("SUT is not running")
 
         with self._cmd_lock:
+<<<<<<< HEAD
             self._logger.info("Running command: %s", command)
+=======
+            self._logger.info(f"Running command '{command}'")
+>>>>>>> 2596020 (LTX system under test implementation)
 
             t_secs = max(timeout, 0)
 
@@ -171,6 +203,7 @@ class LTXSUT(SUT):
                     iobuffer.flush()
 
                 stdout, \
+<<<<<<< HEAD
                     time_ns, \
                     _, \
                     si_status = self._ltx.execute(
@@ -178,6 +211,15 @@ class LTXSUT(SUT):
                         command,
                         timeout=t_secs,
                         stdout_callback=_callback)
+=======
+                time_ns, \
+                _, \
+                si_status = self._ltx.execute(
+                    self._table_id,
+                    command,
+                    timeout=t_secs,
+                    stdout_callback=_callback)
+>>>>>>> 2596020 (LTX system under test implementation)
 
                 ret = {
                     "command": command,
@@ -195,6 +237,7 @@ class LTXSUT(SUT):
                 raise SUTError(f"LTX: {str(err)}")
 
     def fetch_file(
+<<<<<<< HEAD
             self,
             target_path: str,
             timeout: float = 3600) -> bytes:
@@ -210,8 +253,36 @@ class LTXSUT(SUT):
 
                 self._logger.info("Fetching done")
                 return data
+=======
+        self,
+        target_path: str,
+        local_path: str,
+        timeout: float = 3600) -> None:
+        if not target_path:
+            raise ValueError("target path is empty")
+
+        if not local_path:
+            raise ValueError("local path is empty")
+
+        if not os.path.isfile(target_path):
+            raise ValueError("target file doesn't exist")
+
+        with self._fetch_lock:
+            self._logger.info(f"Fetching {target_path} -> {local_path}")
+
+            try:
+                data = self._ltx.get_file(target_path, timeout=timeout)
+
+                with open(local_path, 'wb') as localf:
+                    localf.write(data)
+>>>>>>> 2596020 (LTX system under test implementation)
             except LTXError as err:
                 if "Timeout" in str(err):
                     raise SUTTimeoutError(f"LTX: {str(err)}")
 
                 raise SUTError(f"LTX: {str(err)}")
+<<<<<<< HEAD
+=======
+
+            self._logger.info(f"Fetching done")
+>>>>>>> 2596020 (LTX system under test implementation)
