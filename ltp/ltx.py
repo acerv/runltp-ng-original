@@ -81,27 +81,7 @@ class LTXSUT(SUT):
         }
 
     def get_tained_info(self) -> set:
-        """
-        Return information about kernel if tained.
-        :returns: set(int, list[str]),
-        """
-        self._logger.info("Checking for tained kernel")
-
-        data = self.fetch_file("/proc/sys/kernel/tainted", timeout=1)
-        code = int(data.decode(encoding="utf-8").rstrip())
-
-        tained_num = len(self.TAINED_MSG)
-        bits = format(code, f"0{tained_num}b")[::-1]
-
-        messages = []
-        for i in range(0, tained_num):
-            if bits[i] == "1":
-                msg = self.TAINED_MSG[i]
-                messages.append(msg)
-
-        self._logger.debug("code=%d, messages=%s", code, messages)
-
-        return code, messages
+        return 0, []
 
     def _stop(self) -> None:
         """
