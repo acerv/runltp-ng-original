@@ -62,6 +62,47 @@ class LTXSUT(SUT):
     def is_running(self) -> bool:
         return self._ltx is not None
 
+    def ping(self) -> float:
+        if not self.is_running:
+            raise SUTError("SUT is not running")
+
+        time_ns = self._ltx.ping()
+        time_s = time_ns / 10e9
+
+        return time_s
+
+    def get_info(self) -> dict:
+        # TODO
+        return {
+            "distro": "linux",
+            "distro_ver": "unknown",
+            "kernel": "unknown",
+            "arch": "unknown"
+        }
+
+    def get_tained_info(self) -> set:
+        """
+        Return information about kernel if tained.
+        :returns: set(int, list[str]),
+        """
+        self._logger.info("Checking for tained kernel")
+
+        data = self.fetch_file("/proc/sys/kernel/tainted", timeout=1)
+        code = int(data.decode(encoding="utf-8").rstrip())
+
+        tained_num = len(self.TAINED_MSG)
+        bits = format(code, f"0{tained_num}b")[::-1]
+
+        messages = []
+        for i in range(0, tained_num):
+            if bits[i] == "1":
+                msg = self.TAINED_MSG[i]
+                messages.append(msg)
+
+        self._logger.debug("code=%d, messages=%s", code, messages)
+
+        return code, messages
+
     def _stop(self) -> None:
         """
         Internal stop routine.
@@ -174,31 +215,23 @@ class LTXSUT(SUT):
                 raise SUTError(f"LTX: {str(err)}")
 
     def fetch_file(
-        self,
-        target_path: str,
-        local_path: str,
-        timeout: float = 3600) -> None:
+            self,
+            target_path: str,
+            timeout: float = 3600) -> bytes:
         if not target_path:
             raise ValueError("target path is empty")
 
-        if not local_path:
-            raise ValueError("local path is empty")
-
-        if not os.path.isfile(target_path):
-            raise ValueError("target file doesn't exist")
-
         with self._fetch_lock:
-            self._logger.info(f"Fetching {target_path} -> {local_path}")
+            self._logger.info(f"Downloading {target_path}")
 
+            t_secs = max(timeout, 0)
             try:
-                data = self._ltx.get_file(target_path, timeout=timeout)
+                data = self._ltx.get_file(target_path, timeout=t_secs)
 
-                with open(local_path, 'wb') as localf:
-                    localf.write(data)
+                self._logger.info(f"Fetching done")
+                return data
             except LTXError as err:
                 if "Timeout" in str(err):
                     raise SUTTimeoutError(f"LTX: {str(err)}")
 
                 raise SUTError(f"LTX: {str(err)}")
-
-            self._logger.info(f"Fetching done")
