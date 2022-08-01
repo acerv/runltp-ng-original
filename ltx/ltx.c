@@ -1070,6 +1070,9 @@ int main(void)
 {
 	ltx_pid = getpid();
 
+	if (ltx_pid == 1)
+		LTX_LOG("Running as init");
+
 	for (int i = 0; i < 0x7f; i++) {
 		struct ltx_ev_source *const evs = &childs[i].ev_source;
 
