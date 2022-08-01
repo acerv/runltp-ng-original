@@ -650,7 +650,7 @@ static int process_exec_msg(struct ltx_cursor *cur, const uint8_t args_n)
 	LTX_EXP_POS(dup2(pipefd[1], STDERR_FILENO));
 	LTX_EXP_POS(dup2(pipefd[1], STDOUT_FILENO));
 
-	LTX_EXP_0(execv(argsv[0], argsv));
+	LTX_EXP_0(execvp(argsv[0], argsv));
 	__builtin_unreachable();
 }
 
