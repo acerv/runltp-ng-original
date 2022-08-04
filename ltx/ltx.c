@@ -1,5 +1,6 @@
-#include <linux/limits.h>
 #define _GNU_SOURCE
+
+#include <linux/limits.h>
 
 #include <endian.h>
 #include <fcntl.h>
@@ -97,7 +98,8 @@ enum ltx_msg_types {
 	ltx_msg_data,
 	ltx_msg_kill,
 	ltx_msg_version,
-	ltx_msg_max = ltx_msg_version,
+	ltx_msg_cat,
+	ltx_msg_max = ltx_msg_cat,
 };
 
 enum ltx_kind {
@@ -158,7 +160,7 @@ enum msgp_fmt {
 
 enum ltx_ev_source_type {
 	ltx_ev_io,
-	ltx_ev_child_io,
+	ltx_ev_slot_io,
 	ltx_ev_signal
 };
 
@@ -170,11 +172,12 @@ struct ltx_ev_source {
 	};
 };
 
-struct ltx_child {
+struct ltx_slot {
 	struct ltx_ev_source ev_source;
 	pid_t pid;
 	int fd;
 	char args[ARG_MAX/2];
+	char *argsv[256];
 	char env_ks[ARG_MAX/16];
 	uint16_t env_ksv[256];
 	char env_vs[ARG_MAX/2];
@@ -200,7 +203,7 @@ static struct ltx_ev_source ltx_sig = {
 static int ep_fd;
 static pid_t ltx_pid;
 
-static struct ltx_child childs[0x7f];
+static struct ltx_slot slots[0x7f];
 static uint32_t child_pids[0x7f];
 
 __attribute__((const, warn_unused_result))
@@ -478,8 +481,8 @@ static void ltx_epoll_add(struct ltx_ev_source *ev_src,
 		.events = events,
 		.data = (epoll_data_t){ .ptr = ev_src },
 	};
-	const int fd = ev_src->type == ltx_ev_child_io ?
-		childs[ev_src->table_id].fd :
+	const int fd = ev_src->type == ltx_ev_slot_io ?
+		slots[ev_src->table_id].fd :
 		ev_src->fd;
 
 	LTX_EXP_0(epoll_ctl(ep_fd, EPOLL_CTL_ADD, fd, &ev));
@@ -595,23 +598,59 @@ static void ltx_msg_echo(struct ltx_cursor *cur)
 	out_buf.used += cur->used;
 }
 
-static int process_exec_msg(struct ltx_cursor *cur, const uint8_t args_n)
+static pid_t fork_child(const uint8_t table_id)
 {
-	uint8_t table_id;
-	char *argsv[256];
+	struct ltx_slot *const slot = slots + table_id;
 	pid_t pid;
-	struct ltx_child *child;
-	int c, pipefd[2];
+	int pipefd[2];
 
-	table_id = ltx_cur_shift(cur);
+	ltx_assert(table_id < 0x7f, "Exec: (table_id = %u) > 127", table_id);
+
+	LTX_EXP_0(pipe2(pipefd, O_CLOEXEC));
+	slot->fd = pipefd[0];
+	ltx_epoll_add(&slot->ev_source, EPOLLOUT);
+	pid = LTX_EXP_POS(fork());
+
+	if (pid) {
+		close(pipefd[1]);
+		slots[table_id].pid = pid;
+		child_pids[table_id] = pid;
+
+		return pid;
+	}
+
+	for (int i = 0; i < 256; i++) {
+		const char *const key = slot->env_ks + slot->env_ksv[i];
+		const char *const val = slot->env_vs + slot->env_vsv[i];
+
+		if (!slot->env_ksv[i + 1])
+			break;
+
+		LTX_EXP_0(setenv(key, val, 1));
+	}
+
+	LTX_EXP_POS(dup2(pipefd[1], STDERR_FILENO));
+	LTX_EXP_POS(dup2(pipefd[1], STDOUT_FILENO));
+
+	return 0;
+}
+
+static int parse_args(struct ltx_cursor *cur,
+		      const uint8_t table_id,
+		      const uint8_t args_n)
+{
+	struct ltx_slot *const slot = slots + table_id;
+	char **argsv;
+	int c;
+
 	ltx_assert(table_id < 0x7f, "Exec: (table_id = %u) > 127", table_id);
 	ltx_assert(args_n - 1 < 256, "Exec: Too many arguments: %u", args_n);
 
 	if (!cur->left)
 		return 0;
 
-	child = childs + table_id;
-	argsv[0] = child->args;
+	argsv = slot->argsv;
+	argsv[0] = slot->args;
 	for (c = 0; c < args_n - 1; c++) {
 		struct ltx_str path = ltx_read_str(cur);
 
@@ -623,35 +662,64 @@ static int process_exec_msg(struct ltx_cursor *cur, const uint8_t args_n)
 	}
 	argsv[c] = NULL;
 
+	return 1;
+}
+
+static int process_exec_msg(struct ltx_cursor *cur, const uint8_t args_n)
+{
+	uint8_t table_id;
+	char **argsv;
+
+	table_id = ltx_cur_shift(cur);
+	if (!parse_args(cur, table_id, args_n))
+		return 0;
+
 	ltx_msg_echo(cur);
 
-	LTX_EXP_0(pipe2(pipefd, O_CLOEXEC));
-	child->fd = pipefd[0];
-	ltx_epoll_add(&child->ev_source, EPOLLOUT);
-	pid = LTX_EXP_POS(fork());
-
-	if (pid) {
-		close(pipefd[1]);
-		childs[table_id].pid = pid;
-		child_pids[table_id] = pid;
+	if (fork_child(table_id))
 		return 1;
-	}
 
-	for (int i = 0; i < 256; i++) {
-		const char *const key = child->env_ks + child->env_ksv[i];
-		const char *const val = child->env_vs + child->env_vsv[i];
-
-		if (!child->env_ksv[i + 1])
-			break;
-
-		LTX_EXP_0(setenv(key, val, 1));
-	}
-
-	LTX_EXP_POS(dup2(pipefd[1], STDERR_FILENO));
-	LTX_EXP_POS(dup2(pipefd[1], STDOUT_FILENO));
-
+	argsv = slots[table_id].argsv;
 	LTX_EXP_0(execvp(argsv[0], argsv));
 	__builtin_unreachable();
+}
+
+static int process_cat_msg(struct ltx_cursor *cur, const uint8_t args_n)
+{
+	uint8_t table_id;
+	char **argsv;
+	char *path;
+	int i, fd;
+	ssize_t len;
+	size_t pagesz;
+
+	table_id = ltx_cur_shift(cur);
+	if (!parse_args(cur, table_id, args_n))
+		return 0;
+
+	ltx_msg_echo(cur);
+
+	if (fork_child(table_id))
+		return 1;
+
+	pagesz = getpagesize();
+	argsv = slots[table_id].argsv;
+
+	for (i = 0; argsv[i]; i++) {
+		path = argsv[i];
+
+		fd = LTX_EXP_FD(open(path, O_RDONLY));
+
+		do {
+			len = LTX_EXP_POS(splice(fd, NULL,
+						 STDOUT_FILENO, NULL,
+						 pagesz, 0));
+		} while (len);
+
+		close(fd);
+	}
+
+	exit(0);
 }
 
 static int process_get_file_msg(struct ltx_cursor *cur)
@@ -783,20 +851,20 @@ static int process_env_msg(struct ltx_cursor *const cur)
 		return 1;
 	}
 
-	struct ltx_child *child = childs + table_id;
+	struct ltx_slot *slot = slots + table_id;
 	for (i = 0; i < 256; i++) {
-		size_t cur_off = child->env_ksv[i];
-		size_t nxt_off = child->env_ksv[i + 1];
+		size_t cur_off = slot->env_ksv[i];
+		size_t nxt_off = slot->env_ksv[i + 1];
 		size_t new_off = cur_off + key.len + 1;
 		size_t cur_len = nxt_off ? nxt_off - cur_off : 0;
-		char *cur = child->env_ks + cur_off;
+		char *cur = slot->env_ks + cur_off;
 
 		if (!cur_len) {
 			memcpy(cur, key.data, key.len);
 			cur[key.len] = '\0';
 			ltx_assert(new_off < ARG_MAX/16,
 				   "Ran out of env key space: %zu", new_off);
-			child->env_ksv[i + 1] = new_off;
+			slot->env_ksv[i + 1] = new_off;
 			break;
 		}
 
@@ -806,8 +874,8 @@ static int process_env_msg(struct ltx_cursor *const cur)
 
 	ltx_assert(i < 255, "Ran out of env slots in %u", table_id);
 
-	size_t cur_off = child->env_vsv[i];
-	size_t nxt_off = child->env_vsv[i + 1];
+	size_t cur_off = slot->env_vsv[i];
+	size_t nxt_off = slot->env_vsv[i + 1];
 	size_t new_off = cur_off + val.len + 1;
 	size_t slot_len = nxt_off ? nxt_off - cur_off : 0;
 
@@ -815,13 +883,13 @@ static int process_env_msg(struct ltx_cursor *const cur)
 		   "Ran out of env value space: %zu", new_off);
 
 	if (slot_len && slot_len != val.len + 1) {
-		memmove(child->env_vs + new_off,
-			child->env_vs + nxt_off,
+		memmove(slot->env_vs + new_off,
+			slot->env_vs + nxt_off,
 			ARG_MAX/2 - ltx_max_sz(nxt_off, new_off));
 	}
 
-	child->env_vsv[i + 1] = new_off;
-	ltx_to_cstring(&val, child->env_vs + cur_off);
+	slot->env_vsv[i + 1] = new_off;
+	ltx_to_cstring(&val, slot->env_vs + cur_off);
 
 	return 1;
 }
@@ -938,6 +1006,18 @@ static void process_msgs(void)
 				      LTX_STR(sizeof("LTX Version="VERSION),
 					      "LTX Version="VERSION));
 			break;
+		case ltx_msg_cat:
+			ltx_assert(msg_arr_len > 2,
+				   "Cat: (msg_arr_len = %u) < 3",
+				   msg_arr_len);
+
+			if (!cur.left)
+				goto out;
+
+			if (!process_cat_msg(&cur, msg_arr_len - 1))
+				goto out;
+
+			break;
 		}
 
 		if (out_buf.used > BUFSIZ / 4)
@@ -953,14 +1033,36 @@ out:
 		outer_cur.left);
 }
 
+static void process_slot_io(const struct epoll_event *const ev)
+{
+	struct ltx_ev_source *const ev_src = ev->data.ptr;
+	struct ltx_slot *const slot = slots + ev_src->table_id;
+	uint8_t *log_text = ltx_buf_end(&out_buf) + 32;
+	ssize_t len;
+
+	ltx_assert(ev->events & EPOLLHUP || ev->events & EPOLLOUT,
+		   "Unexpected child IO event: 0x%x", ev->events);
+
+	len = LTX_EXP_POS(read(slot->fd,
+			       log_text,
+			       ltx_min_sz(1024, ltx_buf_avail(&out_buf) - 32)));
+
+	if (len) {
+		LTX_WRITE_MSG(&out_buf, ltx_msg_log,
+			      LTX_NUMBER(ev_src->table_id),
+			      LTX_NUMBER(ltx_gettime()),
+			      LTX_STR(len, (char *)log_text));
+	} else {
+		close(slot->fd);
+	}
+}
+
 static int process_event(const struct epoll_event *const ev)
 {
 	struct ltx_ev_source *const ev_src = ev->data.ptr;
-	struct ltx_child *child;
 	struct signalfd_siginfo si[0x7f];
 	ssize_t len, sig_n;
 	uint8_t table_id;
-	uint8_t *log_text;
 
 	switch (ev_src->type) {
 	case ltx_ev_io:
@@ -997,27 +1099,12 @@ static int process_event(const struct epoll_event *const ev)
 				       LTX_NUMBER(si[i].ssi_status));
 
 			child_pids[table_id] = 0;
-			childs[table_id].pid = 0;
+			slots[table_id].pid = 0;
 		}
 		break;
-	case ltx_ev_child_io:
-		ltx_assert(ev->events & EPOLLHUP || ev->events & EPOLLOUT,
-			   "Unexpected child IO event: 0x%x", ev->events);
-
-		child = childs + ev_src->table_id;
-		log_text = ltx_buf_end(&out_buf) + 32;
-		len = LTX_EXP_POS(read(child->fd,
-				       log_text,
-				       ltx_min_sz(1024, ltx_buf_avail(&out_buf) - 32)));
-
-		if (len) {
-			LTX_WRITE_MSG(&out_buf, ltx_msg_log,
-				      LTX_NUMBER(ev_src->table_id),
-				      LTX_NUMBER(ltx_gettime()),
-				      LTX_STR(len, (char *)log_text));
-		} else {
-			close(child->fd);
-		}
+	case ltx_ev_slot_io:
+		process_slot_io(ev);
+		break;
 	}
 
 	if (out_buf.used > BUFSIZ / 4)
@@ -1074,9 +1161,9 @@ int main(void)
 		LTX_LOG("Running as init");
 
 	for (int i = 0; i < 0x7f; i++) {
-		struct ltx_ev_source *const evs = &childs[i].ev_source;
+		struct ltx_ev_source *const evs = &slots[i].ev_source;
 
-		evs->type = ltx_ev_child_io;
+		evs->type = ltx_ev_slot_io;
 		evs->table_id = i;
 	}
 

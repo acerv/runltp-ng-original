@@ -248,7 +248,6 @@ def test_get_file(ltx_helper, tmp_path):
     assert data[0] == 8
     assert data[1] == pattern
 
-
 def test_kill(ltx_helper, whereis):
     """
     Test KILL command.
@@ -328,3 +327,30 @@ def test_env(ltx_helper, whereis):
     assert res[0] == 5
     assert res[3] == 1
     assert res[4] == 0
+
+def test_cat(ltx_helper, tmp_path):
+    """
+    Test CAT command.
+    """
+    pattern = 'AaXa\x00\x01\x02Zz'
+    d = tmp_path / 'get_file'
+    d.mkdir()
+    p = d / 'pattern'
+
+    p.write_text(pattern, 'utf8')
+    ltx_helper.send(msgpack.packb([11, 0, p.as_posix()]))
+
+    log = ltx_helper.unpack_next()
+    assert log[0] == 4
+    assert log[1] == 0
+    ltx_helper.check_time(log[2])
+    assert log[3] == pattern
+
+    res = ltx_helper.unpack_next()
+    assert len(res) == 5
+    assert res[0] == 5
+    assert res[1] == 0
+    ltx_helper.check_time(res[2])
+    assert res[3] == 1
+    assert res[4] == 0
+
