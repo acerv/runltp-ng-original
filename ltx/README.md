@@ -100,11 +100,14 @@ Sent to LTX to execute a program. `pathname` is the absolute or
 relative executable path. `argv1...argvn` are the arguments and can be
 omitted. The value for `argv[0]` is extracted from `pathname`.
 
+The output of the child process will be sent in log messages. When the
+child terminates a result message will be sent.
+
 `table_id`: positive fixint
 `pathname`: fixstr | str 8
-`argv[1..12]`: fixstr | str 8
+`argv[1..254]`: fixstr | str 8
 
-`[3, table_id, pathname, argv1, ..., argv12]`
+`[3, table_id, pathname, argv1, ..., argv254]`
 
 ### Log
 
@@ -136,8 +139,9 @@ See `waitid`.
 Sent to LTX; starts a file transfer from LTX to the host. LTX will
 respond with a single data message.
 
-Note that this will block LTX while the transfer is in progress. Also
-it's unclear what size of file this can handle.
+This uses the `sendfile` systemcall so it only works with filesystems
+which support it. Also it blocks LTX while the transfer is in
+progress. So it should not be used while testing is in progress.
 
 `path`: fixstr | str 8
 
@@ -147,8 +151,8 @@ it's unclear what size of file this can handle.
 
 Sent to LTX; will save the contained data to the path specified.
 
-Not that like all messages this is echoed back. Also see Get File
-above.
+Like all messages this is echoed back. After it has written the file
+it uses `sendfile` to do this. See Get File above.
 
 `path`: fixstr | str 8
 `data`: bin 8 | bin 16 | bin 32
@@ -177,3 +181,19 @@ e.g. "LTX Version=0.0.1-dev". Everything after the '=' is the version
 number.
 
 `[10]`
+
+### Cat
+
+Sent to LTX; similar to the shell cat builtin and the LTX exec
+command. Cat takes a list of file paths and starts a subprocess which
+writes the file contents to stdout.
+
+This results in the file contents being returned in log messages
+followed by a result message. Unless there is an error then the log
+messages will also contain an error description. One can check the result
+status code before trying to interpret the output.
+
+`table_id`: positive fixint
+`paths[1..255]`: fixstr | str 8
+
+`[11, table_id, argv1, ..., argv255]`
