@@ -7,11 +7,11 @@
 """
 import platform
 import traceback
-from ltp.metadata import Test
-from ltp.metadata import Suite
+import ltp.events
+from ltp.data import Test
+from ltp.data import Suite
 from ltp.results import TestResults
 from ltp.results import SuiteResults
-from ltp.events import EventHandler
 
 # pylint: disable=too-many-public-methods
 # pylint: disable=missing-function-docstring
@@ -29,13 +29,14 @@ class ConsoleUserInterface:
     CYAN = "\033[1;36m"
     RESET = "\033[2J"
 
+    def __init__(self, colors_rule: str = "default") -> None:
+        self._colors_rule = colors_rule
 
-    @staticmethod
-    def _print(msg: str, color: str = None, end: str = "\n"):
+    def _print(self, msg: str, color: str = None, end: str = "\n"):
         """
         Print a message.
         """
-        if color:
+        if color and self._colors_rule != "none":
             print(color + msg + '\033[0m', end=end)
         else:
             print(msg, end=end)
@@ -46,29 +47,32 @@ class SimpleUserInterface(ConsoleUserInterface):
     Console based user interface without many fancy stuff.
     """
 
-    def __init__(self, events: EventHandler) -> None:
+    def __init__(self, colors_rule: str = "default") -> None:
+        super().__init__(colors_rule=colors_rule)
+
         self._sut_not_responding = False
         self._kernel_panic = False
         self._kernel_tained = None
         self._timed_out = False
 
-        events.register("session_started", self.session_started)
-        events.register("session_stopped", self.session_stopped)
-        events.register("session_error", self.session_error)
-        events.register("sut_start", self.sut_start)
-        events.register("sut_stop", self.sut_stop)
-        events.register("sut_restart", self.sut_restart)
-        events.register("sut_not_responding", self.sut_not_responding)
-        events.register("kernel_panic", self.kernel_panic)
-        events.register("kernel_tained", self.kernel_tained)
-        events.register("test_timed_out", self.test_timed_out)
-        events.register("suite_download_started", self.suite_download_started)
-        events.register("suite_started", self.suite_started)
-        events.register("suite_completed", self.suite_completed)
-        events.register("test_started", self.test_started)
-        events.register("test_completed", self.test_completed)
-        events.register("run_cmd_start", self.run_cmd_start)
-        events.register("run_cmd_stop", self.run_cmd_stop)
+        ltp.events.register("session_started", self.session_started)
+        ltp.events.register("session_stopped", self.session_stopped)
+        ltp.events.register("session_error", self.session_error)
+        ltp.events.register("sut_start", self.sut_start)
+        ltp.events.register("sut_stop", self.sut_stop)
+        ltp.events.register("sut_restart", self.sut_restart)
+        ltp.events.register("sut_not_responding", self.sut_not_responding)
+        ltp.events.register("kernel_panic", self.kernel_panic)
+        ltp.events.register("kernel_tained", self.kernel_tained)
+        ltp.events.register("test_timed_out", self.test_timed_out)
+        ltp.events.register("suite_download_started",
+                            self.suite_download_started)
+        ltp.events.register("suite_started", self.suite_started)
+        ltp.events.register("suite_completed", self.suite_completed)
+        ltp.events.register("test_started", self.test_started)
+        ltp.events.register("test_completed", self.test_completed)
+        ltp.events.register("run_cmd_start", self.run_cmd_start)
+        ltp.events.register("run_cmd_stop", self.run_cmd_stop)
 
     def session_started(self, tmpdir: str) -> None:
         uname = platform.uname()
@@ -113,8 +117,7 @@ class SimpleUserInterface(ConsoleUserInterface):
     def suite_download_started(
             self,
             name: str,
-            target: str,
-            local: str) -> None:
+            target: str) -> None:
         self._print(f"Downloading suite: {name}")
 
     def suite_started(self, suite: Suite) -> None:
@@ -131,7 +134,10 @@ class SimpleUserInterface(ConsoleUserInterface):
         message += f"Broken Tests: {results.broken}\n"
         message += f"Warnings: {results.warnings}\n"
         message += f"Kernel Version: {results.kernel}\n"
+        message += f"CPU: {results.cpu}\n"
         message += f"Machine Architecture: {results.arch}\n"
+        message += f"RAM: {results.ram}\n"
+        message += f"Swap memory: {results.swap}\n"
         message += f"Distro: {results.distro}\n"
         message += f"Distro Version: {results.distro_ver}\n"
 
@@ -177,17 +183,23 @@ class SimpleUserInterface(ConsoleUserInterface):
         self._timed_out = False
 
     def run_cmd_start(self, cmd: str) -> None:
-        self._print(f"{cmd}: ", end="", color=self.CYAN)
+        self._print(f"{cmd} ", end="", color=self.CYAN)
 
-    def run_cmd_stop(self, _: str, returncode: int) -> None:
-        msg = "ok"
-        col = self.GREEN
+    def run_cmd_stop(self, command: str, stdout: str, returncode: int) -> None:
+        self._print(f"(exit_code {returncode}", end="")
 
-        if returncode != 0:
-            msg = "error"
-            col = self.RED
+        if "TFAIL" in stdout:
+            self._print(" TFAIL", color=self.RED, end="")
+        elif "TSKIP" in stdout:
+            self._print(" TSKIP", color=self.YELLOW, end="")
+        elif "TCONF" in stdout:
+            self._print(" TCONF", color=self.YELLOW, end="")
+        elif "TBROK" in stdout:
+            self._print(" TBROK", color=self.CYAN, end="")
+        elif "TPASS" in stdout:
+            self._print(" TPASS", color=self.GREEN, end="")
 
-        self._print(msg, color=col)
+        self._print(")")
 
 
 class VerboseUserInterface(ConsoleUserInterface):
@@ -195,28 +207,31 @@ class VerboseUserInterface(ConsoleUserInterface):
     Verbose console based user interface.
     """
 
-    def __init__(self, events: EventHandler) -> None:
+    def __init__(self, colors_rule: str = "default") -> None:
+        super().__init__(colors_rule=colors_rule)
+
         self._timed_out = False
         self._buffer = ""
 
-        events.register("session_started", self.session_started)
-        events.register("session_stopped", self.session_stopped)
-        events.register("session_error", self.session_error)
-        events.register("sut_start", self.sut_start)
-        events.register("sut_stop", self.sut_stop)
-        events.register("sut_restart", self.sut_restart)
-        events.register("sut_stdout_line", self.sut_stdout_line)
-        events.register("kernel_tained", self.kernel_tained)
-        events.register("test_timed_out", self.test_timed_out)
-        events.register("suite_download_started", self.suite_download_started)
-        events.register("suite_started", self.suite_started)
-        events.register("suite_completed", self.suite_completed)
-        events.register("test_started", self.test_started)
-        events.register("test_completed", self.test_completed)
-        events.register("test_stdout_line", self.test_stdout_line)
-        events.register("run_cmd_start", self.run_cmd_start)
-        events.register("run_cmd_stdout", self.run_cmd_stdout)
-        events.register("run_cmd_stop", self.run_cmd_stop)
+        ltp.events.register("session_started", self.session_started)
+        ltp.events.register("session_stopped", self.session_stopped)
+        ltp.events.register("session_error", self.session_error)
+        ltp.events.register("sut_start", self.sut_start)
+        ltp.events.register("sut_stop", self.sut_stop)
+        ltp.events.register("sut_restart", self.sut_restart)
+        ltp.events.register("sut_stdout_line", self.sut_stdout_line)
+        ltp.events.register("kernel_tained", self.kernel_tained)
+        ltp.events.register("test_timed_out", self.test_timed_out)
+        ltp.events.register("suite_download_started",
+                            self.suite_download_started)
+        ltp.events.register("suite_started", self.suite_started)
+        ltp.events.register("suite_completed", self.suite_completed)
+        ltp.events.register("test_started", self.test_started)
+        ltp.events.register("test_completed", self.test_completed)
+        ltp.events.register("test_stdout_line", self.test_stdout_line)
+        ltp.events.register("run_cmd_start", self.run_cmd_start)
+        ltp.events.register("run_cmd_stdout", self.run_cmd_stdout)
+        ltp.events.register("run_cmd_stop", self.run_cmd_stop)
 
     def session_started(self, tmpdir: str) -> None:
         uname = platform.uname()
@@ -270,9 +285,8 @@ class VerboseUserInterface(ConsoleUserInterface):
     def suite_download_started(
             self,
             name: str,
-            target: str,
-            local: str) -> None:
-        self._print(f"Downloading suite: {target} -> {local}")
+            target: str) -> None:
+        self._print(f"Downloading suite: {target}")
 
     def suite_started(self, suite: Suite) -> None:
         self._print(f"Starting suite: {suite.name}")
@@ -288,7 +302,10 @@ class VerboseUserInterface(ConsoleUserInterface):
         message += f"Broken Tests: {results.broken}\n"
         message += f"Warnings: {results.warnings}\n"
         message += f"Kernel Version: {results.kernel}\n"
+        message += f"CPU: {results.cpu}\n"
         message += f"Machine Architecture: {results.arch}\n"
+        message += f"RAM: {results.ram}\n"
+        message += f"Swap memory: {results.swap}\n"
         message += f"Distro: {results.distro}\n"
         message += f"Distro Version: {results.distro_ver}\n"
 
@@ -305,16 +322,18 @@ class VerboseUserInterface(ConsoleUserInterface):
 
     def test_stdout_line(self, _: Test, line: str) -> None:
         col = ""
-        if "TPASS" in line:
-            col = self.GREEN
-        elif "TFAIL" in line:
-            col = self.RED
-        elif "TSKIP" in line:
-            col = self.YELLOW
-        elif "TCONF" in line:
-            col = self.CYAN
-        elif "Kernel panic" in line:
-            col = self.RED
+
+        if self._colors_rule == "default":
+            if "TPASS" in line:
+                col = self.GREEN
+            elif "TFAIL" in line:
+                col = self.RED
+            elif "TSKIP" in line:
+                col = self.YELLOW
+            elif "TCONF" in line:
+                col = self.CYAN
+            elif "Kernel panic" in line:
+                col = self.RED
 
         self._print(line, color=col)
 
@@ -324,12 +343,6 @@ class VerboseUserInterface(ConsoleUserInterface):
     def run_cmd_stdout(self, data: bytes) -> None:
         self._print(data.decode(encoding="utf-8", errors="ignore"))
 
-    def run_cmd_stop(self, _: str, returncode: int) -> None:
-        msg = "Done"
-        col = self.GREEN
-
-        if returncode != 0:
-            msg = "Error"
-            col = self.RED
-
-        self._print(msg, color=col)
+    def run_cmd_stop(self, command: str, stdout: str, returncode: int) -> None:
+        msg = f"\nExit code: {returncode}"
+        self._print(msg)

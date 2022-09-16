@@ -12,15 +12,20 @@ import signal
 import logging
 import threading
 import subprocess
-from .sut import SUT, IOBuffer
-from .sut import SUTError
-from .sut import SUTTimeoutError
+import ltp.sut
+from ltp.sut import SUT, IOBuffer
+from ltp.sut import SUTError
+from ltp.sut import SUTTimeoutError
 
 
 class HostSUT(SUT):
     """
     SUT implementation using host's shell.
     """
+
+    # hack: this parameter is useful during unit testing, since we can
+    # override it without using PropertyMock that seems to be bugged
+    NAME = "host"
 
     def __init__(self, cwd: str = None, env: dict = None) -> None:
         super().__init__()
@@ -36,7 +41,7 @@ class HostSUT(SUT):
 
     @property
     def name(self) -> str:
-        return "host"
+        return self.NAME
 
     @property
     def is_running(self) -> bool:
@@ -54,30 +59,8 @@ class HostSUT(SUT):
     def get_info(self) -> dict:
         self._logger.info("Reading SUT information")
 
-        # create suite results
-        def _run_cmd(cmd: str) -> str:
-            """
-            Run command, check for returncode and return command's stdout.
-            """
-            ret = self.run_command(cmd, timeout=3)
-            if ret["returncode"] != 0:
-                raise SUTError(f"Can't read information from SUT: {cmd}")
-
-            stdout = ret["stdout"].rstrip()
-
-            return stdout
-
-        distro = _run_cmd(". /etc/os-release; echo \"$ID\"")
-        distro_ver = _run_cmd(". /etc/os-release; echo \"$VERSION_ID\"")
-        kernel = _run_cmd("uname -s -r -v")
-        arch = _run_cmd("uname -m")
-
-        ret = {
-            "distro": distro,
-            "distro_ver": distro_ver,
-            "kernel": kernel,
-            "arch": arch,
-        }
+        ret = ltp.sut.collect_sysinfo(self)
+        ret.pop("kernel_tained")
 
         self._logger.debug(ret)
 
@@ -86,22 +69,7 @@ class HostSUT(SUT):
     def get_tained_info(self) -> set:
         self._logger.info("Checking for tained kernel")
 
-        ret = self.run_command(
-            "cat /proc/sys/kernel/tainted",
-            timeout=1)
-
-        if ret["returncode"]:
-            raise SUTError("Can't check for tained kernel")
-
-        tained_num = len(self.TAINED_MSG)
-        code = int(ret["stdout"].rstrip())
-        bits = format(code, f"0{tained_num}b")[::-1]
-
-        messages = []
-        for i in range(0, tained_num):
-            if bits[i] == "1":
-                msg = self.TAINED_MSG[i]
-                messages.append(msg)
+        code, messages = ltp.sut.collect_sysinfo(self)["kernel_tained"]
 
         self._logger.debug("code=%d, messages=%s", code, messages)
 
@@ -151,15 +119,15 @@ class HostSUT(SUT):
         self._initialized = False
 
     def stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         self._inner_stop(signal.SIGHUP, timeout)
 
     def force_stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         self._inner_stop(signal.SIGKILL, timeout)
 
     def _read_stdout(self, size: int, iobuffer: IOBuffer = None) -> bytes:
@@ -196,8 +164,8 @@ class HostSUT(SUT):
             t_secs = max(timeout, 0)
 
             self._logger.info("Executing command (timeout=%d): %s",
-                t_secs,
-                command)
+                              t_secs,
+                              command)
 
             # pylint: disable=consider-using-with
             self._proc = subprocess.Popen(

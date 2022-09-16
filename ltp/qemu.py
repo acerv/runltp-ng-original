@@ -16,9 +16,11 @@ import secrets
 import logging
 import threading
 import subprocess
-from .sut import SUT, IOBuffer
-from .sut import SUTError
-from .sut import SUTTimeoutError
+import ltp.sut
+from ltp.sut import SUT
+from ltp.sut import IOBuffer
+from ltp.sut import SUTError
+from ltp.sut import SUTTimeoutError
 
 
 # pylint: disable=too-many-instance-attributes
@@ -190,30 +192,8 @@ class QemuSUT(SUT):
     def get_info(self) -> dict:
         self._logger.info("Reading SUT information")
 
-        # create suite results
-        def _run_cmd(cmd: str) -> str:
-            """
-            Run command, check for returncode and return command's stdout.
-            """
-            ret = self.run_command(cmd, timeout=3)
-            if ret["returncode"] != 0:
-                raise SUTError(f"Can't read information from SUT: {cmd}")
-
-            stdout = ret["stdout"].rstrip()
-
-            return stdout
-
-        distro = _run_cmd(". /etc/os-release; echo \"$ID\"")
-        distro_ver = _run_cmd(". /etc/os-release; echo \"$VERSION_ID\"")
-        kernel = _run_cmd("uname -s -r -v")
-        arch = _run_cmd("uname -m")
-
-        ret = {
-            "distro": distro,
-            "distro_ver": distro_ver,
-            "kernel": kernel,
-            "arch": arch,
-        }
+        ret = ltp.sut.collect_sysinfo(self)
+        ret.pop("kernel_tained")
 
         self._logger.debug(ret)
 
@@ -222,22 +202,7 @@ class QemuSUT(SUT):
     def get_tained_info(self) -> set:
         self._logger.info("Checking for tained kernel")
 
-        ret = self.run_command(
-            "cat /proc/sys/kernel/tainted",
-            timeout=1)
-
-        if ret["returncode"]:
-            raise SUTError("Can't check for tained kernel")
-
-        tained_num = len(self.TAINED_MSG)
-        code = int(ret["stdout"].rstrip())
-        bits = format(code, f"0{tained_num}b")[::-1]
-
-        messages = []
-        for i in range(0, tained_num):
-            if bits[i] == "1":
-                msg = self.TAINED_MSG[i]
-                messages.append(msg)
+        code, messages = ltp.sut.collect_sysinfo(self)["kernel_tained"]
 
         self._logger.debug("code=%d, messages=%s", code, messages)
 
@@ -279,10 +244,10 @@ class QemuSUT(SUT):
                 raise SUTError(err)
 
     def _wait_for(
-        self,
-        message: str,
-        timeout: float,
-        iobuffer: IOBuffer) -> str:
+            self,
+            message: str,
+            timeout: float,
+            iobuffer: IOBuffer) -> str:
         """
         Wait a string from stdout.
         """
@@ -319,7 +284,7 @@ class QemuSUT(SUT):
         self._logger.debug("Execute (timeout %f): %s", timeout, repr(command))
 
         self._write_stdin(command)
-        self._wait_for(command, 5, iobuffer) # ignore echo
+        self._wait_for(command, 5, iobuffer)  # ignore echo
 
         stdout = self._wait_for(self._ps1, timeout, iobuffer)
 
@@ -330,98 +295,10 @@ class QemuSUT(SUT):
         return stdout
 
     # pylint: disable=too-many-branches
-    def _inner_stop(
-        self,
-        force: bool = False,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
-        """
-        Inner implementation for both stop/force_stop.
-        """
-        if not self.is_running:
-            return
-
-        self._logger.info("Shutting down virtual machine")
-        self._stop = True
-
-        t_secs = max(timeout, 0)
-
-        # some pylint versions don't recognize threading::Lock::locked
-        # pylint: disable=no-member
-
-        try:
-            # stop command first
-            if self._cmd_lock.locked():
-                self._logger.info("Stop running command")
-
-                # send interrupt character (equivalent of CTRL+C)
-                self._write_stdin('\x03')
-
-                start_t = time.time()
-                while self._cmd_lock.locked():
-                    time.sleep(0.05)
-                    if time.time() - start_t >= t_secs:
-                        raise SUTTimeoutError("Timed out during stop")
-
-            # wait until fetching file is ended
-            if self._fetch_lock.locked():
-                self._logger.info("Stop fetching file")
-
-                start_t = time.time()
-                while self._fetch_lock.locked():
-                    time.sleep(0.05)
-                    if time.time() - start_t >= t_secs:
-                        raise SUTTimeoutError("Timed out during stop")
-
-            # logged in -> poweroff
-            if self._logged_in:
-                self._logger.info("Poweroff virtual machine")
-
-                self._exec("\n", 5, iobuffer)
-                self._write_stdin("poweroff\n")
-
-                start_t = time.time()
-                while self._proc.poll() is None:
-                    events = self._poller.poll(1)
-                    for fdesc, _ in events:
-                        if fdesc != self._proc.stdout.fileno():
-                            continue
-
-                        self._read_stdout(1, iobuffer)
-
-                    if time.time() - start_t >= t_secs:
-                        break
-
-            # still running -> stop process
-            if self._proc.poll() is None:
-                self._logger.info("Killing virtual machine process")
-
-                if force:
-                    self._proc.kill()
-                else:
-                    self._proc.send_signal(signal.SIGHUP)
-
-            # wait communicate() to end
-            if self._comm_lock.locked():
-                start_t = time.time()
-                while self._comm_lock.locked():
-                    time.sleep(0.05)
-                    if time.time() - start_t >= t_secs:
-                        raise SUTTimeoutError("Timed out during stop")
-
-            # wait for process to end
-            start_t = time.time()
-            while self._proc.poll() is None:
-                time.sleep(0.05)
-                if time.time() - start_t >= timeout:
-                    raise SUTTimeoutError("Timed out during stop")
-        finally:
-            self._stop = False
-
     def stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         if not self.is_running:
             return
 
@@ -500,9 +377,9 @@ class QemuSUT(SUT):
             self._stop = False
 
     def force_stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         if not self.is_running:
             return
 
@@ -528,9 +405,9 @@ class QemuSUT(SUT):
             self._stop = False
 
     def communicate(
-        self,
-        timeout: float = 3600,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 3600,
+            iobuffer: IOBuffer = None) -> None:
         if not shutil.which(self._qemu_cmd):
             raise SUTError(f"Command not found: {self._qemu_cmd}")
 
@@ -608,10 +485,10 @@ class QemuSUT(SUT):
                     raise SUTError(err)
 
     def run_command(
-        self,
-        command: str,
-        timeout: float = 3600,
-        iobuffer: IOBuffer = None) -> dict:
+            self,
+            command: str,
+            timeout: float = 3600,
+            iobuffer: IOBuffer = None) -> dict:
         if not command:
             raise ValueError("command is empty")
 
@@ -692,24 +569,24 @@ class QemuSUT(SUT):
             retdata = bytes()
 
             with open(transport_path, "rb") as transport:
-                    while not self._stop and self._last_pos < file_size:
-                        if time.time() - start_t >= timeout:
-                            self._logger.info(
-                                "Transfer timed out after %d seconds",
-                                timeout)
+                while not self._stop and self._last_pos < file_size:
+                    if time.time() - start_t >= timeout:
+                        self._logger.info(
+                            "Transfer timed out after %d seconds",
+                            timeout)
 
-                            raise SUTTimeoutError(
-                                f"Timed out during transfer {target_path}"
-                                f"(timeout={timeout})")
+                        raise SUTTimeoutError(
+                            f"Timed out during transfer {target_path}"
+                            f"(timeout={timeout})")
 
-                        time.sleep(0.05)
+                    time.sleep(0.05)
 
-                        transport.seek(self._last_pos)
-                        data = transport.read(4096)
+                    transport.seek(self._last_pos)
+                    data = transport.read(4096)
 
-                        retdata += data
+                    retdata += data
 
-                        self._last_pos = transport.tell()
+                    self._last_pos = transport.tell()
 
             self._logger.info("File downloaded")
 

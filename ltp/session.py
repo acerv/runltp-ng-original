@@ -9,6 +9,7 @@ import os
 import time
 import logging
 import threading
+import ltp.events
 from ltp import LTPException
 from ltp.ltx import LTXSUT
 from ltp.sut import SUT
@@ -16,8 +17,7 @@ from ltp.sut import IOBuffer
 from ltp.qemu import QemuSUT
 from ltp.host import HostSUT
 from ltp.results import SuiteResults
-from ltp.events import EventHandler
-from ltp.tempfile import TempRotator
+from ltp.tempfile import TempDir
 from ltp.dispatcher import SerialDispatcher
 from ltp.export import JSONExporter
 
@@ -33,16 +33,15 @@ class Printer(IOBuffer):
     Redirect data from stdout to events.
     """
 
-    def __init__(self, sut: SUT, events: EventHandler, is_cmd: bool) -> None:
-        self._events = events
+    def __init__(self, sut: SUT, is_cmd: bool) -> None:
         self._sut = sut
         self._is_cmd = is_cmd
 
     def write(self, data: bytes) -> None:
         if self._is_cmd:
-            self._events.fire("run_cmd_stdout", data)
+            ltp.events.fire("run_cmd_stdout", data)
         else:
-            self._events.fire("sut_stdout_line", self._sut.name, data)
+            ltp.events.fire("sut_stdout_line", self._sut.name, data)
 
     def flush(self) -> None:
         pass
@@ -55,37 +54,37 @@ class Session:
 
     def __init__(
             self,
-            events: EventHandler,
             suite_timeout: float = 3600,
-            exec_timeout: float = 3600) -> None:
+            exec_timeout: float = 3600,
+            colors_rule: str = "default") -> None:
         """
-        :param events: generic event handler
-        :type events: EventHandler
         :param suite_timeout: timeout before stopping testing suite
         :type suite_timeout: float
         :param exec_timeout: timeout before stopping single execution
         :type exec_timeout: float
+        :param ltp_colors: enable LTP colors
+        :type ltp_colors: bool
         """
         self._logger = logging.getLogger("ltp.session")
-        self._events = events
         self._suite_timeout = max(suite_timeout, 0)
         self._exec_timeout = max(exec_timeout, 0)
         self._sut = None
         self._dispatcher = None
         self._lock_run = threading.Lock()
-
-        if not events:
-            raise ValueError("events is empty")
+        self._colors_rule = colors_rule
 
     @staticmethod
-    def _setup_debug_log(tmpdir: str) -> None:
+    def _setup_debug_log(tmpdir: TempDir) -> None:
         """
         Save a log file with debugging information
         """
+        if not tmpdir.abspath:
+            return
+
         logger = logging.getLogger()
         logger.setLevel(logging.DEBUG)
 
-        debug_file = os.path.join(tmpdir, "debug.log")
+        debug_file = os.path.join(tmpdir.abspath, "debug.log")
         handler = logging.FileHandler(debug_file, encoding="utf8")
         handler.setLevel(logging.DEBUG)
 
@@ -116,11 +115,10 @@ class Session:
         self._logger.info("")
 
     def _start_sut(
-        self,
-        ltpdir: str,
-        tmpdir: str,
-        session_tmpdir: str,
-        sut_config: dict) -> SUT:
+            self,
+            ltpdir: str,
+            tmpdir: TempDir,
+            sut_config: dict) -> SUT:
         """
         Start a new SUT and return it initialized.
         """
@@ -134,7 +132,12 @@ class Session:
         env["PATH"] = "/sbin:/usr/sbin:/usr/local/sbin:" + \
             f"/root/bin:/usr/local/bin:/usr/bin:/bin:{testcases}"
         env["LTPROOT"] = ltpdir
-        env["TMPDIR"] = tmpdir
+        env["TMPDIR"] = tmpdir.root if tmpdir.root else "/tmp"
+
+        if self._colors_rule == "ltp":
+            env["LTP_COLORIZE_OUTPUT"] = "1"
+        else:
+            env["LTP_COLORIZE_OUTPUT"] = "0"
 
         sut = None
         timeout = 0.0
@@ -142,7 +145,7 @@ class Session:
             config = {}
             config['env'] = env
             config['cwd'] = testcases
-            config['tmpdir'] = session_tmpdir
+            config['tmpdir'] = tmpdir.abspath
             config.update(sut_config)
 
             sut = QemuSUT(**config)
@@ -160,11 +163,11 @@ class Session:
             sut = HostSUT(cwd=ltpdir, env=env)
             timeout = 10.0
 
-        self._events.fire("sut_start", sut.name)
+        ltp.events.fire("sut_start", sut.name)
 
         sut.communicate(
             timeout=timeout,
-            iobuffer=Printer(sut, self._events, False))
+            iobuffer=Printer(sut, False))
 
         return sut
 
@@ -175,16 +178,16 @@ class Session:
         if not self._sut:
             return
 
-        self._events.fire("sut_stop", self._sut.name)
+        ltp.events.fire("sut_stop", self._sut.name)
 
         if self._sut.is_running:
             self._sut.stop(
                 timeout=timeout,
-                iobuffer=Printer(self._sut, self._events, False))
+                iobuffer=Printer(self._sut, False))
         else:
             self._sut.force_stop(
                 timeout=timeout,
-                iobuffer=Printer(self._sut, self._events, False))
+                iobuffer=Printer(self._sut, False))
 
         self._sut = None
 
@@ -210,7 +213,7 @@ class Session:
         self._logger.info("Stopping session")
 
         self._stop_all(timeout=timeout)
-        self._events.fire("session_stopped")
+        ltp.events.fire("session_stopped")
 
         t_start = time.time()
         while self._lock_run.locked():
@@ -222,6 +225,7 @@ class Session:
 
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-statements
+    # pylint: disable=too-many-arguments
     def run_single(
             self,
             sut_config: dict,
@@ -229,7 +233,8 @@ class Session:
             suites: list,
             command: str,
             ltpdir: str,
-            tmpdir: str) -> None:
+            tmpdir: TempDir,
+            skip_tests: list = None) -> int:
         """
         Run some testing suites with a specific SUT configurations.
         :param sut_config: system under test configuration.
@@ -243,81 +248,99 @@ class Session:
         :param ltpdir: ltp install folder
         :type ltpdir: str
         :param tmpdir: temporary directory
-        :type tmpdir: str
+        :type tmpdir: TempDir
+        :param skip_tests: list of tests to ignore
+        :type skip_tests: list(str)
+        :returns: exit code for the session
         """
         if not sut_config:
             raise ValueError("sut configuration can't be empty")
+
+        exit_code = 0
 
         with self._lock_run:
             self._sut = None
             self._dispatcher = None
 
-            session_tmpdir = TempRotator(tmpdir).rotate()
-
             self._logger.info(
                 "Running session using temporary folder: %s",
-                session_tmpdir)
+                tmpdir.abspath)
 
-            self._setup_debug_log(session_tmpdir)
-            self._events.fire("session_started", session_tmpdir)
+            self._setup_debug_log(tmpdir)
+            ltp.events.fire("session_started", tmpdir.abspath)
 
             try:
                 self._sut = self._start_sut(
                     ltpdir,
                     tmpdir,
-                    session_tmpdir,
                     sut_config)
 
                 self._logger.info("Created SUT: %s", self._sut.name)
 
                 if command:
-                    self._events.fire("run_cmd_start", command)
+                    ltp.events.fire("run_cmd_start", command)
 
                     ret = self._sut.run_command(
                         command,
                         timeout=self._exec_timeout,
-                        iobuffer=Printer(self._sut, self._events, True))
+                        iobuffer=Printer(self._sut, True))
 
-                    self._events.fire(
+                    ltp.events.fire(
                         "run_cmd_stop",
                         command,
+                        ret["stdout"],
                         ret["returncode"])
 
                 results = None
                 if suites:
                     self._dispatcher = SerialDispatcher(
                         ltpdir=ltpdir,
-                        tmpdir=session_tmpdir,
+                        tmpdir=tmpdir,
                         sut=self._sut,
-                        events=self._events,
                         suite_timeout=self._suite_timeout,
                         test_timeout=self._exec_timeout)
 
                     self._logger.info("Created dispatcher")
 
-                    results = self._dispatcher.exec_suites(suites)
+                    results = self._dispatcher.exec_suites(
+                        suites, skip_tests=skip_tests)
                     self._dispatcher.stop()
 
                     if results:
                         for result in results:
                             self._print_results(result)
 
+                        exporter = JSONExporter()
+
+                        if tmpdir.abspath:
+                            # store JSON report in the temporary folder
+                            results_report = os.path.join(
+                                tmpdir.abspath,
+                                "results.json")
+
+                            exporter.save_file(results, results_report)
+
                         if report_path:
-                            exporter = JSONExporter()
                             exporter.save_file(results, report_path)
 
                 if not suites or (results and len(suites) == len(results)):
                     # if the number of suites is the same of the number
                     # of results we can say that session has not been stopped
                     self._stop_sut(timeout=60)
-                    self._events.fire("session_completed", results)
+                    ltp.events.fire("session_completed", results)
                     self._logger.info("Session completed")
             except LTPException as err:
                 self._stop_all(timeout=60)
 
                 self._logger.error("Error: %s", str(err))
-                self._events.fire("session_error", str(err))
+                ltp.events.fire("session_error", str(err))
+
+                exit_code = 1
             except KeyboardInterrupt:
                 self._logger.info("Keyboard interrupt")
                 self._stop_all(timeout=60)
-                self._events.fire("session_stopped")
+                ltp.events.fire("session_stopped")
+
+                exit_code = 2
+
+        return exit_code

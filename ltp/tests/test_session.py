@@ -1,39 +1,40 @@
 """
 Unittests for session module.
 """
+import json
 import os
 import stat
 import threading
 import pytest
+import ltp.events
 from ltp.session import Session
-from ltp.events import EventHandler
-from ltp.events import SyncEventHandler
+from ltp.tempfile import TempDir
 
 
 class EventsTracer:
     """
     Trace events and check they all have been called.
     """
+
     def __init__(
-        self,
-        events: EventHandler,
-        tmpdir: str,
-        sut_name: str,
-        command: str) -> None:
+            self,
+            tmpdir: str,
+            sut_name: str,
+            command: str) -> None:
         self._counter = -1
         self._messages = []
         self._tmpdir = tmpdir
         self._sut_name = sut_name
         self._command = command
 
-        events.register("session_started", self._session_started)
-        events.register("session_completed", self._session_completed)
-        events.register("session_stopped", self._session_stopped)
-        events.register("session_error", self._session_error)
-        events.register("sut_start", self._sut_start)
-        events.register("sut_stop", self._sut_stop)
-        events.register("run_cmd_start", self._run_cmd_start)
-        events.register("run_cmd_stop", self._run_cmd_stop)
+        ltp.events.register("session_started", self._session_started)
+        ltp.events.register("session_completed", self._session_completed)
+        ltp.events.register("session_stopped", self._session_stopped)
+        ltp.events.register("session_error", self._session_error)
+        ltp.events.register("sut_start", self._sut_start)
+        ltp.events.register("sut_stop", self._sut_stop)
+        ltp.events.register("run_cmd_start", self._run_cmd_start)
+        ltp.events.register("run_cmd_stop", self._run_cmd_stop)
 
     def next_event(self) -> str:
         self._counter += 1
@@ -65,15 +66,23 @@ class EventsTracer:
         assert command == self._command
         self._messages.append("run_cmd_start")
 
-    def _run_cmd_stop(self, command, retcode) -> None:
+    def _run_cmd_stop(self, command, stdout, returncode) -> None:
         assert command == self._command
-        assert retcode == 0
+        assert returncode == 0
         self._messages.append("run_cmd_stop")
+
 
 class _TestSession:
     """
     Tests for Session implementation.
     """
+
+    @pytest.fixture(autouse=True, scope="function")
+    def setup(self):
+        """
+        Setup events before test.
+        """
+        ltp.events.reset()
 
     @pytest.fixture
     def ltpdir(self):
@@ -166,22 +175,20 @@ class _TestSession:
         if use_report:
             report_path = str(tmpdir / "report.json")
 
-        events = SyncEventHandler()
         tracer = EventsTracer(
-            events,
             str(tmpdir),
             sut_config["name"],
             command)
 
         try:
-            session = Session(events)
+            session = Session()
             session.run_single(
                 sut_config,
                 report_path,
                 suites,
                 command,
                 ltpdir,
-                str(tmpdir))
+                TempDir(root=tmpdir))
 
             assert tracer.next_event() == "session_started"
             assert tracer.next_event() == "sut_start"
@@ -204,26 +211,56 @@ class _TestSession:
             session.stop()
 
     @pytest.mark.usefixtures("prepare_tmpdir")
+    def test_skip_tests(
+            self,
+            tmpdir,
+            sut_config,
+            ltpdir):
+        """
+        Run a session using a specific sut configuration and skipping tests.
+        """
+        report_path = str(tmpdir / "report.json")
+
+        try:
+            session = Session()
+            session.run_single(
+                sut_config,
+                report_path,
+                ["dirsuite0", "dirsuite1"],
+                None,
+                ltpdir,
+                TempDir(root=tmpdir),
+                skip_tests=["dir02"])
+
+            report_d = None
+            with open(report_path, 'r') as report_f:
+                report_d = json.loads(report_f.read())
+
+            tests = [item['test_fqn'] for item in report_d["results"]]
+            assert "dir02" not in tests
+        finally:
+            session.stop()
+
+    @pytest.mark.usefixtures("prepare_tmpdir")
     def test_stop(self, tmpdir, sut_config, ltpdir, suites):
         """
         Run a session using a specific sut configuration.
         """
         report_path = str(tmpdir / "report.json")
 
-        events = SyncEventHandler()
-        session = Session(events)
+        session = Session()
 
         def _threaded():
             session.stop(timeout=3)
 
         thread = threading.Thread(target=_threaded, daemon=True)
+
         def stop_exec_suites(test):
             thread.start()
 
-        events.register("test_started", stop_exec_suites)
+        ltp.events.register("test_started", stop_exec_suites)
 
         tracer = EventsTracer(
-            events,
             str(tmpdir),
             sut_config["name"],
             None)
@@ -234,7 +271,7 @@ class _TestSession:
             suites,
             None,
             ltpdir,
-            str(tmpdir))
+            TempDir(tmpdir))
 
         thread.join(timeout=10)
 
@@ -243,6 +280,7 @@ class _TestSession:
         assert tracer.next_event() == "sut_start"
         assert tracer.next_event() == "sut_stop"
         assert tracer.next_event() == "session_stopped"
+
 
 class TestHostSession(_TestSession):
     """
@@ -267,6 +305,7 @@ TEST_QEMU_IMAGE = os.environ.get("TEST_QEMU_IMAGE", None)
 TEST_QEMU_PASSWORD = os.environ.get("TEST_QEMU_PASSWORD", None)
 
 
+@pytest.mark.qemu
 @pytest.mark.skipif(TEST_QEMU_IMAGE is None, reason="TEST_QEMU_IMAGE is not defined")
 @pytest.mark.skipif(TEST_QEMU_PASSWORD is None, reason="TEST_QEMU_IMAGE is not defined")
 class TestQemuSession(_TestSession):

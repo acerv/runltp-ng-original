@@ -353,4 +353,3 @@ def test_cat(ltx_helper, tmp_path):
     ltx_helper.check_time(res[2])
     assert res[3] == 1
     assert res[4] == 0
-

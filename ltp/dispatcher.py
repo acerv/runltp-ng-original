@@ -10,15 +10,15 @@ import re
 import time
 import logging
 import threading
+import ltp.data
+import ltp.events
 from ltp import LTPException
 from ltp.sut import IOBuffer
 from ltp.sut import SUTTimeoutError
-from ltp.suite import Test
-from ltp.suite import Suite
+from ltp.data import Test
+from ltp.data import Suite
 from ltp.results import TestResults
 from ltp.results import SuiteResults
-from ltp.metadata import Runtest
-from ltp.events import EventHandler
 
 
 class DispatcherError(LTPException):
@@ -133,11 +133,13 @@ class Dispatcher:
         """
         raise NotImplementedError()
 
-    def exec_suites(self, suites: list) -> list:
+    def exec_suites(self, suites: list, skip_tests: list = None) -> list:
         """
         Execute a list of testing suites.
         :param suites: list of Suite objects
         :type suites: list(str)
+        :param skip_tests: list of tests to skip
+        :type skip_tests: list(str)
         :returns: list(SuiteResults)
         """
         raise NotImplementedError()
@@ -154,10 +156,9 @@ class StdoutChecker(IOBuffer):
     Check for test's stdout and raise an exception if Kernel panic occured.
     """
 
-    def __init__(self, test: Test, events: EventHandler) -> None:
+    def __init__(self, test: Test) -> None:
         self.stdout = ""
         self._test = test
-        self._events = events
         self._line = ""
 
     def write(self, data: bytes) -> None:
@@ -166,7 +167,7 @@ class StdoutChecker(IOBuffer):
         if len(data_str) == 1:
             self._line += data_str
             if data_str == "\n":
-                self._events.fire(
+                ltp.events.fire(
                     "test_stdout_line",
                     self._test,
                     self._line[:-1])
@@ -175,13 +176,13 @@ class StdoutChecker(IOBuffer):
             lines = data_str.split('\n')
             for line in lines[:-1]:
                 self._line += line
-                self._events.fire("test_stdout_line", self._test, self._line)
+                ltp.events.fire("test_stdout_line", self._test, self._line)
                 self._line = ""
 
             self._line = lines[-1]
 
             if data_str.endswith('\n') and self._line:
-                self._events.fire("test_stdout_line", self._test, self._line)
+                ltp.events.fire("test_stdout_line", self._test, self._line)
                 self._line = ""
 
         self.stdout += data_str
@@ -204,7 +205,6 @@ class SerialDispatcher(Dispatcher):
         self._ltpdir = kwargs.get("ltpdir", None)
         self._tmpdir = kwargs.get("tmpdir", None)
         self._sut = kwargs.get("sut", None)
-        self._events = kwargs.get("events", None)
         self._suite_timeout = max(kwargs.get("suite_timeout", 3600.0), 0.0)
         self._test_timeout = max(kwargs.get("test_timeout", 3600.0), 0.0)
         self._exec_lock = threading.Lock()
@@ -213,21 +213,11 @@ class SerialDispatcher(Dispatcher):
         if not self._ltpdir:
             raise ValueError("LTP directory doesn't exist")
 
-        if not self._tmpdir or not os.path.isdir(self._tmpdir):
-            raise ValueError("Temporary directory doesn't exist")
-
         if not self._sut:
             raise ValueError("SUT object is empty")
 
-        if not self._events:
-            raise ValueError("No events are given")
-
         # create temporary directory where saving suites files
-        tmp_suites = os.path.join(self._tmpdir, "runtest")
-        if not os.path.isdir(tmp_suites):
-            os.mkdir(tmp_suites)
-
-        self._runtest = Runtest(tmp_suites)
+        self._tmpdir.mkdir("runtest")
 
     @property
     def is_running(self) -> bool:
@@ -260,31 +250,27 @@ class SerialDispatcher(Dispatcher):
         """
         Download all testing suites and return suites objects.
         """
-        # download all runtest files
+        suites_obj = []
+
         for suite_name in suites:
             target = os.path.join(self._ltpdir, "runtest", suite_name)
-            local = os.path.join(self._tmpdir, "runtest", suite_name)
 
-            self._events.fire(
+            ltp.events.fire(
                 "suite_download_started",
                 suite_name,
-                target,
-                local)
+                target)
 
             data = self._sut.fetch_file(target)
-            with open(local, 'wb') as localf:
-                localf.write(data)
+            data_str = data.decode(encoding="utf-8", errors="ignore")
 
-            self._events.fire(
+            self._tmpdir.mkfile(os.path.join("runtest", suite_name), data_str)
+
+            ltp.events.fire(
                 "suite_download_completed",
                 suite_name,
-                target,
-                local)
+                target)
 
-        # load all suites objects
-        suites_obj = []
-        for suite_name in suites:
-            suite = self._runtest.read_suite(suite_name)
+            suite = ltp.data.read_runtest(suite_name, data_str)
             suites_obj.append(suite)
 
         return suites_obj
@@ -294,7 +280,7 @@ class SerialDispatcher(Dispatcher):
         This method reboot SUT if needed, for example, after a Kernel panic.
         """
         self._logger.info("Rebooting SUT")
-        self._events.fire("sut_restart", self._sut.name)
+        ltp.events.fire("sut_restart", self._sut.name)
 
         if force:
             self._sut.force_stop()
@@ -312,7 +298,7 @@ class SerialDispatcher(Dispatcher):
         self._logger.info("Running test %s", test.name)
         self._logger.debug(test)
 
-        self._events.fire("test_started", test)
+        ltp.events.fire("test_started", test)
 
         args = " ".join(test.arguments)
         cmd = f"{test.command} {args}"
@@ -323,13 +309,13 @@ class SerialDispatcher(Dispatcher):
         tained_code_before, tained_msg_before = self._sut.get_tained_info()
         if tained_msg_before:
             for msg in tained_msg_before:
-                self._events.fire("kernel_tained", msg)
+                ltp.events.fire("kernel_tained", msg)
                 self._logger.debug("Kernel tained before test: %s", msg)
 
         timed_out = False
         reboot = False
 
-        checker = StdoutChecker(test, self._events)
+        checker = StdoutChecker(test)
         try:
             test_data = self._sut.run_command(
                 cmd,
@@ -341,17 +327,17 @@ class SerialDispatcher(Dispatcher):
                 self._sut.ping()
 
                 # SUT replies -> test timed out
-                self._events.fire(
+                ltp.events.fire(
                     "test_timed_out",
                     test.name,
                     self._test_timeout)
             except SUTTimeoutError:
                 reboot = True
-                self._events.fire("sut_not_responding")
+                ltp.events.fire("sut_not_responding")
         except KernelPanicError:
             timed_out = True
             reboot = True
-            self._events.fire("kernel_panic")
+            ltp.events.fire("kernel_panic")
             self._logger.debug("Kernel panic recognized")
 
         if not reboot:
@@ -361,7 +347,7 @@ class SerialDispatcher(Dispatcher):
             if tained_code_before != tained_code_after:
                 reboot = True
                 for msg in tained_msg_after:
-                    self._events.fire("kernel_tained", msg)
+                    ltp.events.fire("kernel_tained", msg)
                     self._logger.debug("Kernel tained after test: %s", msg)
 
         if timed_out:
@@ -378,7 +364,7 @@ class SerialDispatcher(Dispatcher):
             test_data,
             timed_out=timed_out)
 
-        self._events.fire("test_completed", results)
+        ltp.events.fire("test_completed", results)
 
         self._logger.info("Test completed")
         self._logger.debug(results)
@@ -393,10 +379,8 @@ class SerialDispatcher(Dispatcher):
     def _run_suite(
             self,
             suite: Suite,
-            distro: str,
-            distro_ver: str,
-            kernel: str,
-            arch: str) -> SuiteResults:
+            info: dict,
+            skip_tests: list = None) -> SuiteResults:
         """
         Execute a specific testing suite and return the results.
         """
@@ -404,7 +388,7 @@ class SerialDispatcher(Dispatcher):
         self._logger.debug(suite)
 
         # execute suite tests
-        self._events.fire("suite_started", suite)
+        ltp.events.fire("suite_started", suite)
 
         start_t = time.time()
         tests_results = []
@@ -412,6 +396,10 @@ class SerialDispatcher(Dispatcher):
         for test in suite.tests:
             if self._stop:
                 break
+
+            if skip_tests and test.name in skip_tests:
+                self._logger.info("Ignoring test: %s", test.name)
+                continue
 
             results = self._run_test(test)
             if not results:
@@ -431,20 +419,23 @@ class SerialDispatcher(Dispatcher):
         suite_results = SuiteResults(
             suite=suite,
             tests=tests_results,
-            distro=distro,
-            distro_ver=distro_ver,
-            kernel=kernel,
-            arch=arch)
+            distro=info["distro"],
+            distro_ver=info["distro_ver"],
+            kernel=info["kernel"],
+            arch=info["arch"],
+            cpu=info["cpu"],
+            swap=info["swap"],
+            ram=info["ram"])
 
         if suite_results:
-            self._events.fire("suite_completed", suite_results)
+            ltp.events.fire("suite_completed", suite_results)
 
         self._logger.debug(suite_results)
         self._logger.info("Suite completed")
 
         return suite_results
 
-    def exec_suites(self, suites: list) -> list:
+    def exec_suites(self, suites: list, skip_tests: list = None) -> list:
         if not suites:
             raise ValueError("Empty suites list")
 
@@ -455,12 +446,7 @@ class SerialDispatcher(Dispatcher):
 
             results = []
             for suite in suites_obj:
-                result = self._run_suite(
-                    suite,
-                    info["distro"],
-                    info["distro_ver"],
-                    info["kernel"],
-                    info["arch"])
+                result = self._run_suite(suite, info, skip_tests=skip_tests)
 
                 if result:
                     results.append(result)

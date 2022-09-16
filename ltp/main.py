@@ -6,10 +6,12 @@
 .. moduleauthor:: Andrea Cervesato <andrea.cervesato@suse.com>
 """
 import os
+import re
+import sys
 import argparse
 from argparse import ArgumentParser
 from argparse import Namespace
-from ltp.events import SyncEventHandler
+from ltp.tempfile import TempDir
 from ltp.session import Session
 from ltp.ui import SimpleUserInterface
 from ltp.ui import VerboseUserInterface
@@ -70,9 +72,50 @@ def _get_qemu_config(params: list) -> dict:
             "Some parameters are not supported. "
             f"Please use the following: {', '.join(defaults)}")
 
-    if "smp" in config:
-        if not str.isdigit(config["smp"]):
-            raise argparse.ArgumentTypeError("smp must be and integer")
+    if "image" in config and not os.path.isfile(config["image"]):
+        raise argparse.ArgumentTypeError("Qemu image doesn't exist")
+
+    if "image_overlay" in config and os.path.isfile(config["image_overlay"]):
+        raise argparse.ArgumentTypeError("Qemu image overlay already exist")
+
+    if "password" in config and not config["password"]:
+        raise argparse.ArgumentTypeError("Qemu password is empty")
+
+    if "smp" in config and not str.isdigit(config["smp"]):
+        raise argparse.ArgumentTypeError("smp must be and integer")
+
+    return config
+
+
+def _get_ltx_config(params: list) -> dict:
+    """
+    Return ltx configuration.
+    """
+    config = _from_params_to_config(params)
+
+    if "stdin" not in config:
+        raise argparse.ArgumentTypeError(
+            "'stdin' parameter is required by LTX SUT")
+
+    if "stdout" not in config:
+        raise argparse.ArgumentTypeError(
+            "'stdout' parameter is required by LTX SUT")
+
+    if not os.path.exists(config["stdin"]):
+        raise argparse.ArgumentTypeError("'stdin' parameter is not a file")
+
+    if not os.path.exists(config["stdout"]):
+        raise argparse.ArgumentTypeError("'stdout' parameter is not a file")
+
+    defaults = (
+        'stdin',
+        'stdout',
+    )
+
+    if not set(config).issubset(defaults):
+        raise argparse.ArgumentTypeError(
+            "Some parameters are not supported. "
+            f"Please use the following: {', '.join(defaults)}")
 
     return config
 
@@ -176,26 +219,51 @@ def _ltp_run(parser: ArgumentParser, args: Namespace) -> None:
     if not args.run_suite and not args.run_cmd:
         parser.error("--run-suite/--run-cmd are required")
 
-    # TODO: async events handling
-    events = SyncEventHandler()
+    if args.skip_file and not os.path.isfile(args.skip_file):
+        parser.error(f"'{args.skip_file}' skip file doesn't exist")
+
+    if args.tmp_dir and not os.path.isdir(args.tmp_dir):
+        parser.error(f"'{args.tmp_dir}' temporary folder doesn't exist")
 
     if args.verbose:
-        VerboseUserInterface(events)
+        VerboseUserInterface(args.colors_rule)
     else:
-        SimpleUserInterface(events)
+        SimpleUserInterface(args.colors_rule)
 
     session = Session(
-        events=events,
         suite_timeout=args.suite_timeout,
-        exec_timeout=args.exec_timeout)
+        exec_timeout=args.exec_timeout,
+        colors_rule=args.colors_rule)
 
-    session.run_single(
+    # create list of tests to skip
+    skip_tests = []
+    if args.skip_tests:
+        skip_tests.extend(args.skip_tests)
+
+    if args.skip_file:
+        lines = None
+        with open(args.skip_file, 'r', encoding="utf-8") as skip_file:
+            lines = skip_file.readlines()
+
+        toskip = [
+            line.rstrip()
+            for line in lines
+            if not re.search(r'^\s+#.*', line)
+        ]
+        skip_tests.extend(toskip)
+
+    tmpdir = TempDir(args.tmp_dir)
+
+    exit_code = session.run_single(
         args.sut,
         args.json_report,
         args.run_suite,
         args.run_cmd,
         args.ltp_dir,
-        args.tmp_dir)
+        tmpdir,
+        skip_tests=skip_tests)
+
+    sys.exit(exit_code)
 
 
 def run() -> None:
@@ -209,6 +277,12 @@ def run() -> None:
         action="store_true",
         help="Verbose mode")
     parser.add_argument(
+        "--color",
+        "-C",
+        default="default",
+        dest="colors_rule",
+        help="Type of colors rule we want [none, default, ltp]")
+    parser.add_argument(
         "--ltp-dir",
         "-l",
         type=str,
@@ -220,6 +294,16 @@ def run() -> None:
         type=str,
         default="/tmp",
         help="LTP temporary directory")
+    parser.add_argument(
+        "--skip-tests",
+        "-i",
+        nargs="*",
+        help="Skip specific tests")
+    parser.add_argument(
+        "--skip-file",
+        "-I",
+        type=str,
+        help="Skip specific tests using a skip file (newline separated item)")
     parser.add_argument(
         "--suite-timeout",
         "-T",

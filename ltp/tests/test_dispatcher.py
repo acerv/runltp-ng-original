@@ -7,19 +7,26 @@ import stat
 import threading
 import pytest
 from unittest.mock import MagicMock
-from unittest.mock import PropertyMock
+import ltp.events
+import ltp.sut
+from ltp.sut import SUTError
 from ltp.host import HostSUT
-from ltp.events import SyncEventHandler
-from ltp.dispatcher import DispatcherError
 from ltp.dispatcher import SerialDispatcher
 from ltp.dispatcher import SuiteTimeoutError
-from ltp.sut import SUT
+from ltp.tempfile import TempDir
 
 
 class TestSerialDispatcher:
     """
     Test SerialDispatcher implementation.
     """
+
+    @pytest.fixture(autouse=True, scope="function")
+    def setup(self):
+        """
+        Setup events before test.
+        """
+        ltp.events.reset()
 
     @pytest.fixture
     def sut(self, tmpdir):
@@ -35,7 +42,7 @@ class TestSerialDispatcher:
         sut = HostSUT(cwd=testcases, env=env)
         # hack: force the SUT to be recognized as a different host
         # so we can reboot it
-        HostSUT.name = PropertyMock(return_value="testing_host")
+        sut.NAME = "testing_host"
         sut.communicate()
 
         return sut
@@ -98,31 +105,15 @@ class TestSerialDispatcher:
         """
         with pytest.raises(ValueError):
             SerialDispatcher(
-                tmpdir=str(tmpdir),
+                tmpdir=TempDir(root=tmpdir),
                 ltpdir=None,
-                sut=sut,
-                events=SyncEventHandler())
+                sut=sut)
 
         with pytest.raises(ValueError):
             SerialDispatcher(
+                tmpdir=TempDir(root=tmpdir),
                 ltpdir=str(tmpdir),
-                tmpdir="this_folder_doesnt_exist",
-                sut=sut,
-                events=SyncEventHandler())
-
-        with pytest.raises(ValueError):
-            SerialDispatcher(
-                tmpdir=str(tmpdir),
-                ltpdir=str(tmpdir),
-                sut=None,
-                events=SyncEventHandler())
-
-        with pytest.raises(ValueError):
-            SerialDispatcher(
-                tmpdir=str(tmpdir),
-                ltpdir=str(tmpdir),
-                sut=sut,
-                events=None)
+                sut=None)
 
     @pytest.mark.usefixtures("prepare_tmpdir")
     def test_exec_suites_bad_args(self, tmpdir, sut):
@@ -130,10 +121,9 @@ class TestSerialDispatcher:
         Test exec_suites() method with bad arguments.
         """
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(tmpdir / "ltp"),
-            sut=sut,
-            events=SyncEventHandler())
+            sut=sut)
 
         dispatcher._save_dmesg = MagicMock()
         sut.get_tained_info = MagicMock(return_value=(0, ""))
@@ -142,7 +132,7 @@ class TestSerialDispatcher:
             with pytest.raises(ValueError):
                 dispatcher.exec_suites(None)
 
-            with pytest.raises(ValueError):
+            with pytest.raises(SUTError):
                 dispatcher.exec_suites(["this_suite_doesnt_exist"])
         finally:
             sut.stop()
@@ -153,10 +143,9 @@ class TestSerialDispatcher:
         Test exec_suites() method.
         """
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(tmpdir / "ltp"),
-            sut=sut,
-            events=SyncEventHandler())
+            sut=sut)
 
         dispatcher._save_dmesg = MagicMock()
         sut.get_tained_info = MagicMock(return_value=(0, ""))
@@ -191,12 +180,10 @@ class TestSerialDispatcher:
         """
         Test stop method during exec_suites.
         """
-        events = SyncEventHandler()
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(tmpdir / "ltp"),
-            sut=sut,
-            events=events)
+            sut=sut)
 
         def _threaded():
             dispatcher.stop(timeout=3)
@@ -206,7 +193,7 @@ class TestSerialDispatcher:
         def stop_exec_suites(test):
             thread.start()
 
-        events.register("test_started", stop_exec_suites)
+        ltp.events.register("test_started", stop_exec_suites)
 
         dispatcher._save_dmesg = MagicMock()
         sut.get_tained_info = MagicMock(return_value=(0, ""))
@@ -226,10 +213,9 @@ class TestSerialDispatcher:
         Test exec_suites() method executing all different kind of tests.
         """
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(tmpdir / "ltp"),
-            sut=sut,
-            events=SyncEventHandler())
+            sut=sut)
 
         dispatcher._save_dmesg = MagicMock()
         sut.get_tained_info = MagicMock(return_value=(0, ""))
@@ -303,10 +289,9 @@ class TestSerialDispatcher:
         sleepsuite.write("sleep sleep 2")
 
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(ltpdir),
             sut=sut,
-            events=SyncEventHandler(),
             suite_timeout=0.5,
             test_timeout=15)
 
@@ -331,10 +316,9 @@ class TestSerialDispatcher:
         sleepsuite.write("sleep sleep 2")
 
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(ltpdir),
             sut=sut,
-            events=SyncEventHandler(),
             suite_timeout=15,
             test_timeout=0.5)
 
@@ -355,12 +339,10 @@ class TestSerialDispatcher:
         """
         ltpdir = tmpdir / "ltp"
 
-        events = SyncEventHandler()
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(ltpdir),
             sut=sut,
-            events=events,
             suite_timeout=0.5,
             test_timeout=15)
 
@@ -390,18 +372,18 @@ class TestSerialDispatcher:
         try:
             for i in range(0, 18):
                 bit = math.pow(2, i)
-                msg = SUT.TAINED_MSG[i]
+                msg = ltp.sut.TAINED_MSG[i]
 
                 sut.get_tained_info = MagicMock(return_value=(0, [""]))
 
                 checker = TainChecker(dispatcher, bit, msg)
-                events.register("kernel_tained", checker.kernel_tained)
-                events.register("sut_restart", checker.sut_restart)
+                ltp.events.register("kernel_tained", checker.kernel_tained)
+                ltp.events.register("sut_restart", checker.sut_restart)
 
                 dispatcher.exec_suites(suites=["dirsuite0"])
 
-                events.unregister("kernel_tained")
-                events.unregister("sut_restart")
+                ltp.events.unregister("kernel_tained")
+                ltp.events.unregister("sut_restart")
 
                 assert msg == checker.tained_msg
                 assert checker.rebooted
@@ -420,12 +402,10 @@ class TestSerialDispatcher:
         crashsuite = runtest.join("crashme")
         crashsuite.write(f"kernel_panic echo Kernel panic")
 
-        events = SyncEventHandler()
         dispatcher = SerialDispatcher(
-            tmpdir=str(tmpdir),
+            tmpdir=TempDir(root=tmpdir),
             ltpdir=str(ltpdir),
             sut=sut,
-            events=events,
             suite_timeout=10,
             test_timeout=10)
 
@@ -444,8 +424,8 @@ class TestSerialDispatcher:
                 self.rebooted = True
 
         checker = PanicChecker()
-        events.register("kernel_panic", checker.kernel_panic)
-        events.register("sut_restart", checker.sut_restart)
+        ltp.events.register("kernel_panic", checker.kernel_panic)
+        ltp.events.register("sut_restart", checker.sut_restart)
 
         try:
             ret = dispatcher.exec_suites(suites=["crashme"])
