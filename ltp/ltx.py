@@ -109,21 +109,21 @@ class LTXSUT(SUT):
         self._logger.info("LTX executions stopped")
 
     def stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         self._stop()
 
     def force_stop(
-        self,
-        timeout: float = 30,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 30,
+            iobuffer: IOBuffer = None) -> None:
         self._stop()
 
     def communicate(
-        self,
-        timeout: float = 3600,
-        iobuffer: IOBuffer = None) -> None:
+            self,
+            timeout: float = 3600,
+            iobuffer: IOBuffer = None) -> None:
         try:
             self._logger.info("Setting up LTX")
 
@@ -145,10 +145,10 @@ class LTXSUT(SUT):
             raise SUTError(f"LTX: {str(err)}")
 
     def run_command(
-        self,
-        command: str,
-        timeout: float = 3600,
-        iobuffer: IOBuffer = None) -> dict:
+            self,
+            command: str,
+            timeout: float = 3600,
+            iobuffer: IOBuffer = None) -> dict:
         if not command:
             raise ValueError("command is empty")
 
@@ -156,7 +156,7 @@ class LTXSUT(SUT):
             raise SUTError("SUT is not running")
 
         with self._cmd_lock:
-            self._logger.info(f"Running command '{command}'")
+            self._logger.info("Running command: %s", command)
 
             t_secs = max(timeout, 0)
 
@@ -171,13 +171,13 @@ class LTXSUT(SUT):
                     iobuffer.flush()
 
                 stdout, \
-                time_ns, \
-                _, \
-                si_status = self._ltx.execute(
-                    self._table_id,
-                    command,
-                    timeout=t_secs,
-                    stdout_callback=_callback)
+                    time_ns, \
+                    _, \
+                    si_status = self._ltx.execute(
+                        self._table_id,
+                        command,
+                        timeout=t_secs,
+                        stdout_callback=_callback)
 
                 ret = {
                     "command": command,
@@ -202,13 +202,13 @@ class LTXSUT(SUT):
             raise ValueError("target path is empty")
 
         with self._fetch_lock:
-            self._logger.info(f"Downloading {target_path}")
+            self._logger.info("Downloading %s", target_path)
 
             t_secs = max(timeout, 0)
             try:
                 data = self._ltx.get_file(target_path, timeout=t_secs)
 
-                self._logger.info(f"Fetching done")
+                self._logger.info("Fetching done")
                 return data
             except LTXError as err:
                 if "Timeout" in str(err):
