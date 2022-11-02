@@ -7,6 +7,7 @@
 """
 import os
 import re
+import sys
 import time
 import logging
 import threading
@@ -349,6 +350,11 @@ class SerialDispatcher(Dispatcher):
         reboot = False
 
         checker = StdoutChecker(test)
+
+        # print into dmesg
+        open('/dev/kmsg', 'w').write('%s[%s]: starting test %s (%s)\n' %
+                                     (sys.argv[0], os.getpid(), test.name, cmd))
+
         try:
             test_data = self._sut.run_command(
                 cmd,
