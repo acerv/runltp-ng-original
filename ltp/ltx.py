@@ -77,7 +77,10 @@ class LTXSUT(SUT):
             "distro": "linux",
             "distro_ver": "unknown",
             "kernel": "unknown",
-            "arch": "unknown"
+            "arch": "unknown",
+            "cpu": "unknown",
+            "ram": "unknown",
+            "swap": "unknown",
         }
 
     def get_tained_info(self) -> set:

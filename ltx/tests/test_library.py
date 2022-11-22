@@ -8,6 +8,9 @@ import pytest
 from ltx import LTX
 from ltx import LTXError
 
+# add default ltx marker to all tests
+pytestmark = pytest.mark.ltx
+
 
 @pytest.fixture
 def ltx(executor):

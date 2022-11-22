@@ -3,9 +3,13 @@ Tests for LTX binary.
 """
 import os
 import re
+import sys
 import time
 import pytest
 import msgpack
+
+# add default ltx marker to all tests
+pytestmark = pytest.mark.ltx
 
 
 class LTXHelper:
@@ -16,7 +20,7 @@ class LTXHelper:
     def __init__(self, proc) -> None:
         self._proc = proc
         self._buff = bytes()
-        self._start_time = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+        self._start_time = time.clock_gettime(time.CLOCK_MONOTONIC_RAW) * 10e8
 
     @property
     def proc(self):
@@ -44,10 +48,16 @@ class LTXHelper:
             if self._buff[i] == data[i]:
                 continue
 
+            buff_hex = ""
+            if sys.version_info >= (3, 8):
+                buff_hex = self._buff.hex(' ')
+            else:
+                buff_hex = self._buff.hex()
+
             raise ValueError(
                 f"Expected {hex(data[i])}, "
                 f"but got {hex(self._buff[i])} at {i} in "
-                f"'{self._buff.hex(' ')}' / {self._buff}")
+                f"'{buff_hex}' / {self._buff}")
 
         self._buff = self._buff[length:]
 
@@ -94,7 +104,7 @@ class LTXHelper:
         Check if the given time is inside bounds.
         """
         assert self._start_time < time_ns
-        assert time_ns < time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+        assert time_ns < time.clock_gettime(time.CLOCK_MONOTONIC_RAW) * 10e8
 
 
 @pytest.fixture
@@ -161,7 +171,7 @@ def test_ping_flood(ltx_helper):
 
     ping_eg = msgpack.packb([0])
     pong_eg = msgpack.packb(
-        [1, time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)])
+        [1, time.clock_gettime(time.CLOCK_MONOTONIC_RAW) * 10e8])
 
     for _ in range(2048):
         ltx_helper.expect_exact(ping_eg)
@@ -248,6 +258,7 @@ def test_get_file(ltx_helper, tmp_path):
     assert data[0] == 8
     assert data[1] == pattern
 
+
 def test_kill(ltx_helper, whereis):
     """
     Test KILL command.
@@ -264,6 +275,7 @@ def test_kill(ltx_helper, whereis):
     ltx_helper.check_time(res[2])
     assert res[3] == 2
     assert res[4] == 9
+
 
 def test_env(ltx_helper, whereis):
     """
@@ -328,6 +340,7 @@ def test_env(ltx_helper, whereis):
     assert res[3] == 1
     assert res[4] == 0
 
+
 def test_cat(ltx_helper, tmp_path):
     """
     Test CAT command.
@@ -353,4 +366,3 @@ def test_cat(ltx_helper, tmp_path):
     ltx_helper.check_time(res[2])
     assert res[3] == 1
     assert res[4] == 0
-
