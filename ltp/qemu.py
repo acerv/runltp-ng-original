@@ -7,7 +7,6 @@
 """
 import os
 import re
-import abc
 import time
 import signal
 import select
@@ -537,6 +536,13 @@ class QemuSUT(SUT):
 
                     raise SUTError(err)
 
+    def run_multiple_commands(
+            self,
+            commands: list,
+            timeout: float = 3600.0,
+            command_completed: callable = None) -> list:
+        raise SUTError("Parallel execution is not supported by Qemu SUT")
+
     def run_command(
             self,
             command: str,
@@ -567,14 +573,6 @@ class QemuSUT(SUT):
             self._logger.debug(ret)
 
             return ret
-
-    @abc.abstractmethod
-    def run_multiple_commands(
-            self,
-            commands: list,
-            timeout: float = 3600,
-            command_completed: callable = None) -> list:
-        pass
 
     def fetch_file(
             self,

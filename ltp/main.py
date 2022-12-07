@@ -20,6 +20,7 @@ from ltp.tempfile import TempDir
 from ltp.session import Session
 from ltp.ui import SimpleUserInterface
 from ltp.ui import VerboseUserInterface
+from ltp.ui import ParallelUserInterface
 
 
 # runtime loaded SUT(s)
@@ -165,10 +166,13 @@ def _ltp_run(parser: ArgumentParser, args: Namespace) -> None:
 
     ltp.events.start_event_loop()
 
-    if args.verbose:
-        VerboseUserInterface(args.no_colors)
+    if args.parallel:
+        ParallelUserInterface(args.no_colors)
     else:
-        SimpleUserInterface(args.no_colors)
+        if args.verbose:
+            VerboseUserInterface(args.no_colors)
+        else:
+            SimpleUserInterface(args.no_colors)
 
     session = Session(
         LOADED_SUT,
@@ -185,7 +189,8 @@ def _ltp_run(parser: ArgumentParser, args: Namespace) -> None:
         args.run_cmd,
         args.ltp_dir,
         tmpdir,
-        skip_tests=skip_tests)
+        skip_tests=skip_tests,
+        parallel=args.parallel)
 
     ltp.events.stop_event_loop()
 
@@ -252,6 +257,11 @@ def run() -> None:
         "--run-cmd",
         "-c",
         help="Command to run")
+    parser.add_argument(
+        "--parallel",
+        "-p",
+        action="store_true",
+        help="Parallelize suites execution")
     parser.add_argument(
         "--sut",
         "-s",

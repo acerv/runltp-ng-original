@@ -6,7 +6,6 @@
 .. moduleauthor:: Andrea Cervesato <andrea.cervesato@suse.com>
 """
 import os
-import abc
 import time
 import select
 import socket
@@ -376,13 +375,12 @@ class SSHSUT(SUT):
 
             return ret
 
-    @abc.abstractmethod
     def run_multiple_commands(
             self,
             commands: list,
-            timeout: float = 3600,
+            timeout: float = 3600.0,
             command_completed: callable = None) -> list:
-        pass
+        raise SUTError("Parallel execution is not supported by SSH SUT")
 
     def fetch_file(
             self,

@@ -16,6 +16,7 @@ from ltp.sut import IOBuffer
 from ltp.results import SuiteResults
 from ltp.tempfile import TempDir
 from ltp.dispatcher import SerialDispatcher
+from ltp.dispatcher import ParallelDispatcher
 from ltp.dispatcher import SuiteTimeoutError
 from ltp.export import JSONExporter
 from ltp.utils import Timeout
@@ -257,7 +258,8 @@ class Session:
             command: str,
             ltpdir: str,
             tmpdir: TempDir,
-            skip_tests: str = None) -> int:
+            skip_tests: str = None,
+            parallel: bool = False) -> int:
         """
         Run some testing suites with a specific SUT configurations.
         :param sut_config: system under test configuration.
@@ -274,6 +276,8 @@ class Session:
         :type tmpdir: TempDir
         :param skip_tests: tests to ignore in a regex form
         :type skip_tests: str
+        :param parallel: enable parallel execution of tests
+        :type parallel: bool
         :returns: exit code for the session
         """
         if not sut_config:
@@ -315,12 +319,20 @@ class Session:
                         ret["returncode"])
 
                 if suites:
-                    self._dispatcher = SerialDispatcher(
-                        ltpdir=ltpdir,
-                        tmpdir=tmpdir,
-                        sut=self._sut,
-                        suite_timeout=self._suite_timeout,
-                        test_timeout=self._exec_timeout)
+                    if parallel:
+                        self._dispatcher = ParallelDispatcher(
+                            ltpdir=ltpdir,
+                            tmpdir=tmpdir,
+                            sut=self._sut,
+                            suite_timeout=self._suite_timeout,
+                            test_timeout=self._exec_timeout)
+                    else:
+                        self._dispatcher = SerialDispatcher(
+                            ltpdir=ltpdir,
+                            tmpdir=tmpdir,
+                            sut=self._sut,
+                            suite_timeout=self._suite_timeout,
+                            test_timeout=self._exec_timeout)
 
                     self._logger.info("Created dispatcher")
 

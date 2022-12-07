@@ -312,3 +312,74 @@ class VerboseUserInterface(ConsoleUserInterface):
             col = self.RED
 
         self._print(line, color=col)
+
+
+class ParallelUserInterface(ConsoleUserInterface):
+    """
+    Console based user interface for parallel execution.
+    """
+
+    def __init__(self, no_colors: bool = False) -> None:
+        super().__init__(no_colors=no_colors)
+
+        self._sut_not_responding = False
+        self._kernel_panic = False
+        self._kernel_tained = None
+        self._timed_out = False
+
+        ltp.events.register("sut_not_responding", self.sut_not_responding)
+        ltp.events.register("kernel_panic", self.kernel_panic)
+        ltp.events.register("kernel_tained", self.kernel_tained)
+        ltp.events.register("test_timed_out", self.test_timed_out)
+        ltp.events.register("test_completed", self.test_completed)
+
+    def sut_not_responding(self) -> None:
+        self._sut_not_responding = True
+
+    def kernel_panic(self) -> None:
+        self._kernel_panic = True
+
+    def kernel_tained(self, message: str) -> None:
+        self._kernel_tained = message
+
+    def test_timed_out(self, _: Test, timeout: int) -> None:
+        self._timed_out = True
+
+    def test_completed(self, results: TestResults) -> None:
+        self._print(f"{results.test.name}: ", end="")
+
+        if self._timed_out:
+            self._print("timed out", color=self.RED)
+        elif self._sut_not_responding:
+            # this message will replace ok/fail message
+            self._print("SUT not responding", color=self.RED)
+        elif self._kernel_panic:
+            # this message will replace ok/fail message
+            self._print("kernel panic", color=self.RED)
+        else:
+            msg = "pass"
+            col = self.GREEN
+
+            if results.failed > 0:
+                msg = "fail"
+                col = self.RED
+            elif results.skipped > 0:
+                msg = "skip"
+                col = self.YELLOW
+            elif results.broken > 0:
+                msg = "broken"
+                col = self.CYAN
+
+            self._print(msg, color=col, end="")
+
+            if self._kernel_tained:
+                self._print(" | ", end="")
+                self._print("tained", color=self.YELLOW, end="")
+
+            uf_time = self._user_friendly_duration(results.exec_time)
+            self._print(f"  ({uf_time})")
+
+        self._sut_not_responding = False
+        self._kernel_panic = False
+        self._kernel_tained = None
+        self._timed_out = False

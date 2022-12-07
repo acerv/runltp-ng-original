@@ -170,6 +170,8 @@ class SuiteResults(Results):
         :type kernel: str
         :param arch: OS architecture
         :type arch: str
+        :param exec_time: suite execution time
+        :type exec_time: float
         """
         self._suite = kwargs.get("suite", None)
         self._tests = kwargs.get("tests", [])
@@ -180,6 +182,7 @@ class SuiteResults(Results):
         self._cpu = kwargs.get("cpu", None)
         self._swap = kwargs.get("swap", None)
         self._ram = kwargs.get("ram", None)
+        self._exec_time = kwargs.get("exec_time", 0.0)
 
         if not self._suite:
             raise ValueError("Empty suite object")
@@ -261,7 +264,7 @@ class SuiteResults(Results):
 
     @property
     def exec_time(self) -> float:
-        return self._get_result("exec_time")
+        return self._exec_time
 
     @property
     def failed(self) -> int:

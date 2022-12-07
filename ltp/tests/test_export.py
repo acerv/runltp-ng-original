@@ -88,7 +88,8 @@ class TestJSONExporter:
                 arch="x86_64",
                 cpu="x86_64",
                 swap="10 kB",
-                ram="1000 kB"),
+                ram="1000 kB",
+                exec_time=3.0),
         ]
 
         output = tmpdir / "output.json"
