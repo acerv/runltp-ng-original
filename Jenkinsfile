@@ -33,6 +33,13 @@ pipeline {
         }
       }
     }
+    stage("Test LTX") {
+      steps {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+          sh 'coverage run -a -m pytest -m "ltx" --junit-xml=results-ltx.xml'
+        }
+      }
+    }
   }
   post {
     always {
